@@ -1,0 +1,31 @@
+---
+name: config
+description: View or edit voice chat configuration. Shows current settings and allows changes.
+disable-model-invocation: true
+argument-hint: "[setting=value]"
+---
+
+# Voice Chat Configuration
+
+View or update voice chat settings.
+
+## If no arguments ($ARGUMENTS is empty)
+
+Show the current configuration by reading these files in order:
+1. `~/.claude-talk/config.env` (user overrides)
+2. Find CLAUDE_TALK_DIR and read `<CLAUDE_TALK_DIR>/config/defaults.env` (defaults)
+
+Display a clear summary of all settings with their current effective values, noting which are defaults and which are user-set.
+
+Also show available TTS voices:
+```bash
+say -v '?' | head -20
+```
+
+## If arguments provided ($ARGUMENTS is not empty)
+
+Parse the argument as `KEY=VALUE` (e.g., `VOICE=Karen`, `MIC_GAIN=4.0`, `AUDIO_DEVICE=2`).
+
+Update `~/.claude-talk/config.env` by adding or replacing the line with that key.
+
+Confirm the change to the user.

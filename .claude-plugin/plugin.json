@@ -1,0 +1,9 @@
+{
+  "name": "claude-talk",
+  "description": "Voice conversation with Claude Code. Speak into your mic, get spoken responses. Real-time transcription via WhisperLiveKit (MLX Metal GPU) + macOS TTS. Apple Silicon Mac only.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Conrad Poepke"
+  },
+  "license": "MIT"
+}

@@ -13,10 +13,13 @@
 
 set -euo pipefail
 
+# Load config
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CLAUDE_TALK_DIR="${CLAUDE_TALK_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+source "$CLAUDE_TALK_DIR/config/defaults.env"
+[[ -f "$HOME/.claude-talk/config.env" ]] && source "$HOME/.claude-talk/config.env"
+
 MODE="${1:-wlk}"
-WLK_PORT="${WLK_PORT:-8090}"
-CPP_PORT="${WHISPER_PORT:-8178}"
-CPP_MODEL="${WHISPER_MODEL:-/tmp/ggml-small.en.bin}"
 CPP_MODEL_URL="https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin"
 
 # --- Check mode ---
@@ -26,8 +29,8 @@ if [[ "$MODE" == "--check" ]]; then
         echo "WhisperLiveKit is running on port $WLK_PORT"
         ok=1
     fi
-    if pgrep -f "whisper-server.*--port.*$CPP_PORT" >/dev/null 2>&1; then
-        echo "whisper-cpp server is running on port $CPP_PORT"
+    if pgrep -f "whisper-server.*--port.*$WHISPER_PORT" >/dev/null 2>&1; then
+        echo "whisper-cpp server is running on port $WHISPER_PORT"
         ok=1
     fi
     if [[ $ok -eq 0 ]]; then
@@ -39,10 +42,9 @@ fi
 
 # --- WhisperLiveKit mode (default) ---
 if [[ "$MODE" == "wlk" ]]; then
-    VENV_PATH="/tmp/wlk-env"
-    if [[ ! -f "$VENV_PATH/bin/activate" ]]; then
-        echo "ERROR: WLK venv not found at $VENV_PATH" >&2
-        echo "Create with: python3.12 -m venv $VENV_PATH && $VENV_PATH/bin/pip install 'whisperlivekit[mlx-whisper]' mlx-whisper sounddevice" >&2
+    if [[ ! -f "$WLK_VENV/bin/activate" ]]; then
+        echo "ERROR: WLK venv not found at $WLK_VENV" >&2
+        echo "Run /claude-talk:voice-install first" >&2
         exit 1
     fi
 
@@ -52,13 +54,12 @@ if [[ "$MODE" == "wlk" ]]; then
         exit 0
     fi
 
-    source "$VENV_PATH/bin/activate"
+    source "$WLK_VENV/bin/activate"
 
     echo "Starting WhisperLiveKit on port $WLK_PORT"
     echo "  Backend: mlx-whisper (Metal GPU)"
     echo "  Model: small.en"
     echo "  WebSocket: ws://localhost:$WLK_PORT/asr"
-    echo "  Web UI: http://localhost:$WLK_PORT"
     echo ""
 
     exec wlk \
@@ -75,22 +76,23 @@ elif [[ "$MODE" == "cpp" ]]; then
         exit 1
     fi
 
-    if [[ ! -f "$CPP_MODEL" ]]; then
+    if [[ ! -f "$WHISPER_MODEL" ]]; then
         echo "Downloading whisper model (small.en, ~465MB)..."
-        curl -L "$CPP_MODEL_URL" -o "$CPP_MODEL"
+        mkdir -p "$(dirname "$WHISPER_MODEL")"
+        curl -L "$CPP_MODEL_URL" -o "$WHISPER_MODEL"
     fi
 
-    if pgrep -f "whisper-server.*--port.*$CPP_PORT" >/dev/null 2>&1; then
-        echo "whisper-cpp server already running on port $CPP_PORT"
+    if pgrep -f "whisper-server.*--port.*$WHISPER_PORT" >/dev/null 2>&1; then
+        echo "whisper-cpp server already running on port $WHISPER_PORT"
         exit 0
     fi
 
-    echo "Starting whisper-cpp on port $CPP_PORT (Metal GPU)"
+    echo "Starting whisper-cpp on port $WHISPER_PORT (Metal GPU)"
     echo ""
 
     exec whisper-server \
-        --model "$CPP_MODEL" \
-        --port "$CPP_PORT" \
+        --model "$WHISPER_MODEL" \
+        --port "$WHISPER_PORT" \
         --threads 4 \
         --language en
 else

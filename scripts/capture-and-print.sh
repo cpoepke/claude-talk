@@ -5,10 +5,6 @@
 # 1. Captures one utterance (blocks until speech + silence detected)
 # 2. Prints the transcription to stdout
 # 3. Exits cleanly
-#
-# When run as a Claude Code background task (run_in_background=true),
-# the stdout output appears in the task completion notification,
-# which wakes the teammate automatically.
 
 set -euo pipefail
 
