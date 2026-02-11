@@ -134,10 +134,45 @@ else
     fi
 fi
 
+# --- Statusline setup ---
+echo ""
+echo "--- Setting up statusline ---"
+chmod +x "$PROJECT_DIR/scripts/statusline.sh"
+
+SETTINGS_FILE="$HOME/.claude/settings.json"
+mkdir -p "$HOME/.claude"
+
+# Build the statusline command that pipes stdin to our script
+STATUSLINE_CMD="cat | bash \"$PROJECT_DIR/scripts/statusline.sh\""
+
+# Read existing settings or create empty object
+if [[ -f "$SETTINGS_FILE" ]]; then
+    SETTINGS=$(cat "$SETTINGS_FILE")
+else
+    SETTINGS='{}'
+fi
+
+# Back up existing statusline command (if any and not already ours)
+EXISTING_CMD=$(echo "$SETTINGS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('statusLine',{}).get('command',''))" 2>/dev/null || echo "")
+if [[ -n "$EXISTING_CMD" && "$EXISTING_CMD" != *"statusline.sh"* ]]; then
+    echo "$EXISTING_CMD" > "$HOME/.claude-talk/statusline-backup.txt"
+    echo "Backed up existing statusline to ~/.claude-talk/statusline-backup.txt"
+fi
+
+# Update settings with our statusline command
+echo "$SETTINGS" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+d['statusLine'] = {'type': 'command', 'command': sys.argv[1]}
+json.dump(d, sys.stdout, indent=2)
+" "$STATUSLINE_CMD" > "${SETTINGS_FILE}.tmp"
+mv -f "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
+echo "Configured Claude Code statusline."
+
 echo ""
 echo "=== Installation complete! ==="
 echo ""
 echo "Next steps:"
 echo "  1. Check audio device index above and update ~/.claude-talk/config.env if needed"
-echo "  2. Start voice chat: /claude-talk:voice-start"
-echo "  3. For help: /claude-talk:voice-help"
+echo "  2. Start voice chat: /claude-talk:start"
+echo "  3. For help: /claude-talk:help"

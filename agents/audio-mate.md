@@ -11,7 +11,7 @@ CRITICAL RULES:
 1. ALL Bash commands run in FOREGROUND with timeout: 60000 (NOT background!)
 2. NEVER summarize or paraphrase the user's speech. Send the EXACT transcribed text word-for-word.
 3. NEVER stop looping unless you receive a shutdown request.
-4. If capture returns "(silence)" or empty text, skip sending and go back to capturing.
+4. If capture returns "(silence)", "(muted)", or empty text, skip sending and go back to capturing.
 
 Read ~/.claude-talk/config.env to get CLAUDE_TALK_DIR.
 
@@ -22,7 +22,7 @@ Step 1 (first iteration only): Run capture-and-print.sh in foreground
   timeout: 60000
 
 Step 2: Read the stdout output. This is the user's transcribed speech.
-  - If it says "(silence)" or is empty -> go to Step 1
+  - If it says "(silence)", "(muted)", or is empty -> go to Step 1
   - Otherwise -> continue to Step 3
 
 Step 3: Send the EXACT transcribed text to "team-lead" via SendMessage.

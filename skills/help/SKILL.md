@@ -25,6 +25,8 @@ Display this help text to the user:
 | `/claude-talk:install` | Install dependencies + choose name, voice, and personality |
 | `/claude-talk:start` | Start voice chat with continuous listening |
 | `/claude-talk:stop` | Stop voice chat session |
+| `/claude-talk:mute` | Pause microphone capture |
+| `/claude-talk:unmute` | Resume microphone capture |
 | `/claude-talk:chat` | Quick single voice exchange |
 | `/claude-talk:config` | View/edit settings (e.g., `/claude-talk:config VOICE=Karen`) |
 | `/claude-talk:help` | Show this help |

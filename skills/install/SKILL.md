@@ -27,6 +27,7 @@ One-time setup: install dependencies, then personalize your voice assistant.
 3. Report install results briefly:
    - Whether dependencies installed successfully
    - The detected audio devices (so they can verify their mic index)
+   - That the Claude Code statusline was configured with a voice state indicator
 
 If install fails, stop here and help the user fix it. Otherwise continue to Part 2.
 

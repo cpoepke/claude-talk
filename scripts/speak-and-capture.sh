@@ -1,11 +1,10 @@
 #!/bin/bash
-# speak-and-capture.sh - Speak a response via TTS, then capture next utterance
+# speak-and-capture.sh - Speak a response via TTS with barge-in support
 #
-# Sequences TTS and capture so the mic doesn't pick up the TTS voice:
-# 1. Speak the response text (if provided via env var or arg)
-# 2. Wait for TTS to finish + settle time
-# 3. Start mic capture
-# 4. Print transcription to stdout and exit
+# Runs TTS and mic capture concurrently. If the user starts talking
+# while TTS is playing, TTS is interrupted immediately and the user's
+# speech is transcribed. If TTS finishes naturally, capture begins
+# instantly with zero gap (mic was already warm).
 #
 # Usage:
 #   REPLY="Hello world" ./speak-and-capture.sh
@@ -20,20 +19,49 @@ CLAUDE_TALK_DIR="${CLAUDE_TALK_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 source "$CLAUDE_TALK_DIR/config/defaults.env"
 [[ -f "$HOME/.claude-talk/config.env" ]] && source "$HOME/.claude-talk/config.env"
 
+# Load state helpers
+source "$SCRIPT_DIR/state.sh"
+
 REPLY="${REPLY:-${1:-}}"
 OUTPUT_FILE="/tmp/voice_chat/utterance_$(date +%s).txt"
 
-# Step 1: Speak response (if any)
 if [[ -n "$REPLY" ]]; then
-    say -v "$VOICE" "$REPLY"
-    # Small pause after TTS to let mic settle
-    sleep 0.3
+    # State: speaking
+    voice_state_write STATUS=speaking
+
+    # Start TTS in background
+    say -v "$VOICE" "$REPLY" &
+    SAY_PID=$!
+
+    # Start capture with barge-in monitoring
+    "$SCRIPT_DIR/capture-utterance.sh" "$OUTPUT_FILE" --tts-pid "$SAY_PID" >/dev/null 2>&1
+
+    # Ensure say is stopped (in case capture ended before TTS)
+    # Suppress "Terminated" message from bash
+    kill "$SAY_PID" 2>/dev/null && wait "$SAY_PID" 2>/dev/null || true
+else
+    # No TTS - poll while muted before capturing
+    MUTE_WAIT=0
+    while is_muted; do
+        sleep 1
+        MUTE_WAIT=$((MUTE_WAIT + 1))
+        if [[ $MUTE_WAIT -ge 55 ]]; then
+            echo "(muted)"
+            exit 0
+        fi
+    done
+
+    # State: listening
+    voice_state_write STATUS=listening
+
+    # Just capture
+    "$SCRIPT_DIR/capture-utterance.sh" "$OUTPUT_FILE" >/dev/null 2>&1
 fi
 
-# Step 2: Capture next utterance
-"$SCRIPT_DIR/capture-utterance.sh" "$OUTPUT_FILE" >/dev/null 2>&1
+# State: idle
+voice_state_write STATUS=idle
 
-# Step 3: Print result
+# Print result
 TEXT=$(cat "$OUTPUT_FILE" 2>/dev/null || echo "")
 rm -f "$OUTPUT_FILE"
 

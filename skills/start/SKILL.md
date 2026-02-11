@@ -32,7 +32,14 @@ If the file does NOT exist, tell the user: "No personality configured yet. Let m
 
 Keep the full personality.md content in your context for the duration of this voice chat session.
 
-### 3. Start Transcription Server
+### 3. Initialize Voice State
+
+Set the initial voice state (Bash):
+```bash
+source "<CLAUDE_TALK_DIR>/scripts/state.sh" && voice_state_write SESSION=active STATUS=idle MUTED=false
+```
+
+### 4. Start Transcription Server
 
 Run the whisper server in background (use Bash with run_in_background):
 ```
@@ -46,7 +53,7 @@ bash "<CLAUDE_TALK_DIR>/scripts/start-whisper-server.sh" --check
 
 If it fails, tell the user and abort.
 
-### 4. Spawn Audio Capture Teammate
+### 5. Spawn Audio Capture Teammate
 
 Create a team named "voice-chat" using TeamCreate.
 
@@ -66,7 +73,7 @@ CRITICAL RULES:
 1. ALL Bash commands run in FOREGROUND with timeout: 60000 (NOT background!)
 2. NEVER summarize or paraphrase the user's speech. Send the EXACT transcribed text word-for-word.
 3. NEVER stop looping unless you receive a shutdown request.
-4. If capture returns "(silence)" or empty text, skip sending and go back to capturing.
+4. If capture returns "(silence)", "(muted)", or empty text, skip sending and go back to capturing.
 
 LOOP:
 
@@ -75,7 +82,7 @@ Step 1 (first iteration only): Run capture-and-print.sh in foreground
   timeout: 60000
 
 Step 2: Read the stdout output. This is the user's transcribed speech.
-  - If it says "(silence)" or is empty -> go to Step 1
+  - If it says "(silence)", "(muted)", or is empty -> go to Step 1
   - Otherwise -> continue to Step 3
 
 Step 3: Send the EXACT transcribed text to "team-lead" via SendMessage.
@@ -96,13 +103,13 @@ Step 6: Read stdout output -> go to Step 2
 REPEAT FOREVER. Never break the loop. Never add commentary. Just relay exact text and speak responses.
 ```
 
-### 5. Greet the User
+### 6. Greet the User
 
 Using your personality name and style, give a short spoken greeting. For example, if your name is Jarvis and style is witty: "Jarvis here. What can I help you with?"
 
 Send this greeting to the audio-mate teammate so it gets spoken via TTS before the first capture.
 
-### 6. Conversational Mode
+### 7. Conversational Mode
 
 While voice chat is active, respond conversationally to messages from the audio-mate teammate. Those messages are EXACT transcriptions of what the user said out loud.
 
