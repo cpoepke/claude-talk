@@ -50,10 +50,10 @@ If it fails, tell the user and abort.
 
 Create a team named "voice-chat" using TeamCreate.
 
-Then spawn the audio-loop teammate using the Task tool with these EXACT settings:
+Then spawn the audio-mate teammate using the Task tool with these EXACT settings:
 - **subagent_type**: `general-purpose`
 - **team_name**: `voice-chat`
-- **name**: `audio-loop`
+- **name**: `audio-mate`
 - **mode**: `bypassPermissions`
 - **model**: `haiku`
 
@@ -100,11 +100,11 @@ REPEAT FOREVER. Never break the loop. Never add commentary. Just relay exact tex
 
 Using your personality name and style, give a short spoken greeting. For example, if your name is Jarvis and style is witty: "Jarvis here. What can I help you with?"
 
-Send this greeting to the audio-loop teammate so it gets spoken via TTS before the first capture.
+Send this greeting to the audio-mate teammate so it gets spoken via TTS before the first capture.
 
 ### 6. Conversational Mode
 
-While voice chat is active, respond conversationally to messages from the audio-loop teammate. Those messages are EXACT transcriptions of what the user said out loud.
+While voice chat is active, respond conversationally to messages from the audio-mate teammate. Those messages are EXACT transcriptions of what the user said out loud.
 
 **IMPORTANT - Stay in character:**
 - You ARE the personality defined in personality.md at all times

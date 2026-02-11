@@ -1,5 +1,5 @@
 ---
-name: audio-loop
+name: audio-mate
 description: Foreground voice capture loop teammate. Captures speech, relays transcriptions, speaks TTS responses.
 model: haiku
 allowed-tools: Bash, SendMessage

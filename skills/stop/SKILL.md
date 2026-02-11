@@ -10,9 +10,9 @@ Gracefully shut down the voice chat session.
 
 ## Steps
 
-1. Send a shutdown request to the "audio-loop" teammate:
+1. Send a shutdown request to the "audio-mate" teammate:
    ```
-   SendMessage type: "shutdown_request", recipient: "audio-loop"
+   SendMessage type: "shutdown_request", recipient: "audio-mate"
    ```
 
 2. Wait for shutdown confirmation.
