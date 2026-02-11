@@ -36,26 +36,18 @@ If install fails, stop here and help the user fix it. Otherwise continue to Part
 
 Walk the user through choosing their preferences. Use AskUserQuestion for each step. Keep it conversational and fun - this is the first impression.
 
-### Question 1: Name
+**IMPORTANT**: Store the chosen voice name in a variable. Every audio preview from this point on MUST use the selected voice.
 
-Ask: "What would you like to call me?"
+### Question 1: Voice (first!)
 
-Use AskUserQuestion with header "Name" and these options:
-- **Claude** - "Classic and straightforward"
-- **Jarvis** - "Inspired by the iconic AI assistant"
-- **Friday** - "Casual and approachable"
-- **Nova** - "Modern and distinctive"
+Tell the user: "First, let's find your voice. Listen to these four options."
 
-(User can also pick "Other" to type a custom name.)
-
-### Question 2: Voice
-
-Ask: "Let me play a few voices so you can pick the one you like best."
-
-Preview each voice by running (Bash):
+Play the question and all voice previews (Bash):
 ```bash
-say -v Daniel "Hello, nice to meet you" && sleep 2 && say -v Karen "Hello, nice to meet you" && sleep 2 && say -v Moira "Hello, nice to meet you" && sleep 2 && say -v Samantha "Hello, nice to meet you"
+say -v Daniel "First, let's find your voice. Listen to these four options." && sleep 1.5 && say -v Daniel "Good evening. I'd be delighted to help you with whatever you need." && sleep 2 && say -v Karen "Hey there! Ready when you are, just say the word." && sleep 2 && say -v Moira "Well now, isn't this lovely. Let's have a grand chat, shall we?" && sleep 2 && say -v Samantha "Hi! I'm here and ready to go. What would you like to talk about?"
 ```
+
+Tell the user which voice was which (Daniel first, Karen second, Moira third, Samantha fourth).
 
 Then use AskUserQuestion with header "Voice" and these options:
 - **Daniel** - "British English, male - warm and articulate"
@@ -63,13 +55,33 @@ Then use AskUserQuestion with header "Voice" and these options:
 - **Moira** - "Irish English, female - gentle and melodic"
 - **Samantha** - "American English, female - neutral and natural"
 
-Update `~/.claude-talk/config.env` by setting the VOICE line to the chosen voice.
+Save the chosen voice. Update `~/.claude-talk/config.env` by setting the VOICE line.
+
+### Question 2: Name
+
+Speak the question and play all name options IN THE CHOSEN VOICE (Bash, replace VOICE with actual selection):
+```bash
+say -v VOICE "Now let's pick a name. Here's how each one sounds." && sleep 1.5 && say -v VOICE "Hi, I'm Claude." && sleep 1.5 && say -v VOICE "Hi, I'm Jarvis." && sleep 1.5 && say -v VOICE "Hi, I'm Friday." && sleep 1.5 && say -v VOICE "Hi, I'm Nova."
+```
+
+Then use AskUserQuestion with header "Name" and these options:
+- **Claude** - "Classic and straightforward"
+- **Jarvis** - "Inspired by the iconic AI assistant"
+- **Friday** - "Casual and approachable"
+- **Nova** - "Modern and distinctive"
+
+(User can also pick "Other" to type a custom name. If they do, play it back: `say -v VOICE "Hi, I'm <custom name>."`)
 
 ### Question 3: Personality Style
 
-Ask: "What conversational style suits you best?"
+Speak the question and play a sample for EACH personality style IN THE CHOSEN VOICE (Bash, replace VOICE with actual selection):
+```bash
+say -v VOICE "Last big choice. How should I talk? Listen to each style." && sleep 1.5 && say -v VOICE "Oh that's awesome! Yeah I totally get what you mean, let me think about that for a sec." && sleep 2 && say -v VOICE "Understood. I'll provide a clear and structured response to your question." && sleep 2 && say -v VOICE "Well well well, look who's got questions! Lucky for you, I've got answers and terrible puns." && sleep 2 && say -v VOICE "That's a really interesting thought. Let's take a moment to consider it carefully."
+```
 
-Use AskUserQuestion with header "Style" and these options:
+Tell the user which style was which (casual first, professional second, witty third, calm fourth).
+
+Then use AskUserQuestion with header "Style" and these options:
 - **Casual & warm** - "Friendly, conversational, occasionally humorous"
 - **Professional & concise** - "Clear, direct, efficient responses"
 - **Witty & playful** - "Clever, fun, enjoys wordplay and banter"
@@ -83,7 +95,10 @@ Three more questions to dial in the experience.
 
 ### Question 4: What should I call you?
 
-Ask: "What should I call you?"
+Speak the question in the chosen voice (Bash):
+```bash
+say -v VOICE "What should I call you?"
+```
 
 Use AskUserQuestion with header "Your name" and these options:
 - **First name** - "I'll ask what it is"
@@ -94,7 +109,10 @@ If they pick "First name", follow up by asking their name in a short text prompt
 
 ### Question 5: Response Length
 
-Ask: "How detailed should my spoken responses be?"
+Speak the question in the chosen voice (Bash):
+```bash
+say -v VOICE "How detailed should my spoken responses be?"
+```
 
 Use AskUserQuestion with header "Verbosity" and these options:
 - **Short & punchy** - "One or two sentences. Get to the point fast."
@@ -103,7 +121,12 @@ Use AskUserQuestion with header "Verbosity" and these options:
 
 ### Question 6: Anything Else?
 
-Ask: "Any special instructions? For example: 'always start with a fun fact', 'be a bit sarcastic', 'speak like a ship captain', or just leave blank."
+Speak the question in the chosen voice (Bash):
+```bash
+say -v VOICE "Last one. Any special instructions for me? Or we can skip this."
+```
+
+Then ask in text: "Any special instructions? For example: 'always start with a fun fact', 'be a bit sarcastic', 'speak like a ship captain', or just leave blank."
 
 This is a free-text question. Do NOT use AskUserQuestion here. Simply ask the question in plain text and wait for the user's reply. If the user says "no", "none", "skip", or similar, treat it as no custom instructions.
 
@@ -188,5 +211,9 @@ Write all choices to `~/.claude-talk/personality.md` using this exact format:
 
 ## Part 5: Confirm
 
-Read back their choices in a brief summary, then tell them:
-"You're all set! Run `/claude-talk:start` to start chatting. Re-run `/claude-talk:install` anytime to change your preferences."
+Read back their choices in a brief summary, then play a final greeting in-character using the chosen voice, name, and style. For example if they picked Jarvis + Daniel + Witty:
+```bash
+say -v Daniel "Jarvis here, reporting for duty. I've got wit, charm, and questionable puns. What more could you want?"
+```
+
+Then tell them: "You're all set! Run `/claude-talk:start` to start chatting. Re-run `/claude-talk:install` anytime to change your preferences."
