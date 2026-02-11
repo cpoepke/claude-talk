@@ -62,12 +62,37 @@ if [[ "$MODE" == "wlk" ]]; then
     echo "  WebSocket: ws://localhost:$WLK_PORT/asr"
     echo ""
 
-    exec wlk \
-        --model small.en \
-        --language en \
-        --backend mlx-whisper \
-        --port "$WLK_PORT" \
-        --pcm-input
+    # Remove stale stop file on startup
+    STOP_FILE="/tmp/voice_chat/wlk.stop"
+    rm -f "$STOP_FILE"
+
+    # Auto-restart loop: WLK crashes on Metal GPU race conditions
+    # Create $STOP_FILE to break the loop (used by stop skill)
+    while true; do
+        wlk \
+            --model small.en \
+            --language en \
+            --backend mlx-whisper \
+            --port "$WLK_PORT" \
+            --pcm-input || true
+
+        # Check if shutdown was requested
+        if [[ -f "$STOP_FILE" ]]; then
+            echo "Stop file found. Shutting down WLK."
+            rm -f "$STOP_FILE"
+            exit 0
+        fi
+
+        echo ""
+        echo "WLK crashed ($(date)). Restarting in 2 seconds..."
+        sleep 2
+
+        # Re-check if port is free (previous process may linger)
+        if curl -s -o /dev/null -w "" "http://localhost:$WLK_PORT/" 2>/dev/null; then
+            echo "Port $WLK_PORT still in use, waiting..."
+            sleep 3
+        fi
+    done
 
 # --- whisper-cpp mode (legacy) ---
 elif [[ "$MODE" == "cpp" ]]; then
