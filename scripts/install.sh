@@ -125,6 +125,8 @@ CLAUDE_TALK_DIR="$PROJECT_DIR"
 # VOICE=Daniel
 # CAPTURE_MODE=wlk
 # SILENCE_SECS=2.0
+# BARGE_IN=true
+# BARGE_IN_RATIO=2.0
 CONF
     echo ""
     echo "Created config at ~/.claude-talk/config.env"

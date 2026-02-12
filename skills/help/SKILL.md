@@ -46,10 +46,19 @@ Settings are in `~/.claude-talk/config.env`. Key settings:
 ### Personality
 Your assistant personality is in `~/.claude-talk/personality.md`. Re-run `/claude-talk:install` to change it.
 
+### Barge-In (interrupt TTS by speaking)
+Requires BlackHole 2ch virtual audio device:
+1. `brew install --cask blackhole-2ch`
+2. Open Audio MIDI Setup → `+` → Create Multi-Output Device
+3. Check "Built-in Output" (first) and "BlackHole 2ch" (no drift correction)
+4. Set Multi-Output Device as system output
+
+BlackHole is auto-detected. When available, you can interrupt TTS mid-sentence by speaking.
+
 ### Troubleshooting
 - **No speech detected**: Check `AUDIO_DEVICE` index and `MIC_GAIN`
 - **Whisper hallucinations**: Increase `MIC_GAIN` or lower `VAD_THRESHOLD`
-- **Echo in capture**: The speak-and-capture script handles this, but increase `SILENCE_SECS` if needed
+- **Barge-in not working**: Ensure system output is set to Multi-Output Device (not just speakers)
 - **Server won't start**: Check if port 8090 is in use: `lsof -i :8090`
 
 ---

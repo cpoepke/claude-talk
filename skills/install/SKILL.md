@@ -52,6 +52,17 @@ Otherwise:
    - The detected audio devices (so they can verify their mic index)
    - That the Claude Code statusline was configured with a voice state indicator
 
+4. **Barge-in setup (optional but recommended)**: Check if BlackHole 2ch is installed by looking for it in the audio device list. If not found, tell the user:
+
+   "For barge-in support (interrupt TTS by speaking), you can optionally set up BlackHole:"
+   1. `brew install --cask blackhole-2ch`
+   2. Open Audio MIDI Setup (Cmd+Space → "Audio MIDI Setup")
+   3. Click `+` → Create Multi-Output Device
+   4. Check "Built-in Output" (must be first) and "BlackHole 2ch" (no drift correction)
+   5. Right-click the Multi-Output Device → Use This Device For Sound Output
+
+   If BlackHole IS found, tell the user barge-in will be auto-detected and remind them to set up the Multi-Output Device if they haven't already.
+
 If install fails, stop here and help the user fix it. Otherwise continue to Part 3.
 
 ---

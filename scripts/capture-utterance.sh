@@ -52,22 +52,33 @@ if [[ "$CAPTURE_MODE" == "wlk" ]]; then
         exit 1
     fi
 
+    # Build args
+    WLK_ARGS=(
+        --device "$AUDIO_DEVICE"
+        --server "$WLK_URL"
+        --output "$OUTPUT_FILE"
+        --gain "$MIC_GAIN"
+        --silence "$SILENCE_SECS"
+    )
+
     if [[ -n "$TTS_PID" ]]; then
-        exec python3 "$SCRIPT_DIR/wlk-capture.py" \
-            --device "$AUDIO_DEVICE" \
-            --server "$WLK_URL" \
-            --output "$OUTPUT_FILE" \
-            --gain "$MIC_GAIN" \
-            --silence "$SILENCE_SECS" \
-            --tts-pid "$TTS_PID"
-    else
-        exec python3 "$SCRIPT_DIR/wlk-capture.py" \
-            --device "$AUDIO_DEVICE" \
-            --server "$WLK_URL" \
-            --output "$OUTPUT_FILE" \
-            --gain "$MIC_GAIN" \
-            --silence "$SILENCE_SECS"
+        WLK_ARGS+=(--tts-pid "$TTS_PID")
     fi
+
+    # Barge-in: auto-detect BlackHole by default (-1), disable with -2
+    if [[ "${BARGE_IN:-true}" == "false" ]]; then
+        WLK_ARGS+=(--reference-device -2)
+    elif [[ -n "${BLACKHOLE_DEVICE:-}" ]]; then
+        WLK_ARGS+=(--reference-device "$BLACKHOLE_DEVICE")
+    else
+        WLK_ARGS+=(--reference-device -1)
+    fi
+
+    if [[ -n "${BARGE_IN_RATIO:-}" ]]; then
+        WLK_ARGS+=(--barge-in-ratio "$BARGE_IN_RATIO")
+    fi
+
+    exec python3 "$SCRIPT_DIR/wlk-capture.py" "${WLK_ARGS[@]}"
 else
     VENV_PATH="$VAD_VENV"
     if [[ -f "$VENV_PATH/bin/activate" ]]; then
