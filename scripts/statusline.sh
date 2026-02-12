@@ -1,8 +1,8 @@
 #!/bin/bash
-# statusline.sh - Claude Code statusline with voice state indicator
+# statusline.sh - Claude Code statusline with team and voice state indicator
 #
-# Reads JSON session data from stdin (model, workspace, etc.)
-# Outputs: model + directory + git branch + voice state
+# Reads JSON session data from stdin (model, workspace, team, etc.)
+# Outputs: model + directory + team + git branch + voice state
 #
 # Voice state is read from ~/.claude-talk/state (if present and SESSION=active)
 
@@ -11,19 +11,22 @@ set -euo pipefail
 # Read JSON from stdin
 INPUT=$(cat)
 
-# Extract model and workspace
-MODEL=$(echo "$INPUT" | jq -r '.model.display_name // empty')
-CWD=$(echo "$INPUT" | jq -r '.workspace.current_dir // empty')
+# Extract model, workspace, and team
+MODEL=$(echo "$INPUT" | jq -r '.model.display_name // empty' 2>/dev/null || echo "")
+CWD=$(echo "$INPUT" | jq -r '.workspace.current_dir // empty' 2>/dev/null || echo "")
 DIR_NAME=$(basename "$CWD" 2>/dev/null || echo "")
+TEAM=$(echo "$INPUT" | jq -r '.team.name // empty' 2>/dev/null || echo "")
 
 # Git info
 GIT_STATUS=""
-if git -C "$CWD" rev-parse --git-dir > /dev/null 2>&1; then
+if [[ -n "$CWD" ]] && git -C "$CWD" rev-parse --git-dir > /dev/null 2>&1; then
     BRANCH=$(git -C "$CWD" --no-optional-locks rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-    if [ -n "$(git -C "$CWD" --no-optional-locks status --porcelain 2>/dev/null)" ]; then
-        GIT_STATUS="git:($BRANCH) ✗"
-    else
-        GIT_STATUS="git:($BRANCH)"
+    if [[ -n "$BRANCH" ]]; then
+        if [ -n "$(git -C "$CWD" --no-optional-locks status --porcelain 2>/dev/null)" ]; then
+            GIT_STATUS="git:($BRANCH) ✗"
+        else
+            GIT_STATUS="git:($BRANCH)"
+        fi
     fi
 fi
 
@@ -55,6 +58,7 @@ fi
 OUTPUT=""
 [[ -n "$MODEL" ]] && OUTPUT="\033[35m${MODEL}\033[0m"
 [[ -n "$DIR_NAME" ]] && OUTPUT="${OUTPUT:+$OUTPUT }\033[36m${DIR_NAME}\033[0m"
+[[ -n "$TEAM" ]] && OUTPUT="${OUTPUT:+$OUTPUT }\033[33mteam:${TEAM}\033[0m"
 [[ -n "$GIT_STATUS" ]] && OUTPUT="${OUTPUT:+$OUTPUT }\033[34m${GIT_STATUS}\033[0m"
 [[ -n "$VOICE_INDICATOR" ]] && OUTPUT="${OUTPUT:+$OUTPUT }${VOICE_INDICATOR}"
 
