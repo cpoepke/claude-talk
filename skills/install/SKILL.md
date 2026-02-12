@@ -81,22 +81,35 @@ Walk the user through choosing their preferences. Use AskUserQuestion for each s
 
 ### Question 1: Voice (first!)
 
-Tell the user: "First, let's find your voice. Listen to these four options."
+Tell the user: "First, let's find your voice. Listen to these options."
 
-Play the question and all voice previews (Bash):
+Before playing previews, check which Enhanced/Premium voices are installed (Bash):
 ```bash
-say -v Daniel "First, let's find your voice. Listen to these four options." && sleep 1.5 && say -v Daniel "Good evening. I'd be delighted to help you with whatever you need." && sleep 2 && say -v Karen "Hey there! Ready when you are, just say the word." && sleep 2 && say -v Moira "Well now, isn't this lovely. Let's have a grand chat, shall we?" && sleep 2 && say -v Samantha "Hi! I'm here and ready to go. What would you like to talk about?"
+say -v '?' | grep -E "(Enhanced|Premium)"
 ```
 
-Tell the user which voice was which (Daniel first, Karen second, Moira third, Samantha fourth).
+**Recommend Enhanced voices:** If few or no Enhanced voices are installed, tell the user:
 
-Then use AskUserQuestion with header "Voice" and these options:
-- **Daniel** - "British English, male - warm and articulate"
-- **Karen** - "Australian English, female - clear and friendly"
-- **Moira** - "Irish English, female - gentle and melodic"
-- **Samantha** - "American English, female - neutral and natural"
+"**Tip:** macOS has higher-quality Enhanced voices that sound much more natural. You can download them in **System Settings > Accessibility > Spoken Content > System Voice > Manage Voices**. I'd especially recommend downloading **Daniel (Enhanced)**, **Karen (Enhanced)**, **Samantha (Enhanced)**, and **Moira (Enhanced)** — they're a big upgrade. Want to go download them now? I'll wait."
 
-Save the chosen voice. Update `~/.claude-talk/config.env` by setting the VOICE line.
+If they say yes, pause and wait for them to confirm they're done downloading. Then re-check available Enhanced voices before continuing.
+
+Play voice previews. For each voice, prefer the Enhanced variant if available (e.g., use `say -v "Daniel (Enhanced)"` instead of `say -v Daniel`). Example with Daniel Enhanced available:
+```bash
+say -v "Daniel (Enhanced)" "First, let's find your voice. Listen to these options." && sleep 1.5 && say -v "Daniel (Enhanced)" "Good evening. I'd be delighted to help you with whatever you need." && sleep 2 && say -v Karen "Hey there! Ready when you are, just say the word." && sleep 2 && say -v Moira "Well now, isn't this lovely. Let's have a grand chat, shall we?" && sleep 2 && say -v Samantha "Hi! I'm here and ready to go. What would you like to talk about?"
+```
+
+Tell the user which voice was which, noting which ones are Enhanced (higher quality) vs standard.
+
+Then use AskUserQuestion with header "Voice". Build the options dynamically based on what Enhanced voices are available. Always prefer Enhanced variants when installed:
+- **Daniel (Enhanced)** - "British English, male - warm and articulate (high quality)" (or **Daniel** if Enhanced not available)
+- **Karen (Enhanced)** - "Australian English, female - clear and friendly (high quality)" (or **Karen** if Enhanced not available)
+- **Moira (Enhanced)** - "Irish English, female - gentle and melodic (high quality)" (or **Moira** if Enhanced not available)
+- **Samantha (Enhanced)** - "American English, female - neutral and natural (high quality)" (or **Samantha** if Enhanced not available)
+
+If the user picks "Other", tell them they can run `say -v '?'` to see all installed voices, and to download more in System Settings > Accessibility > Spoken Content > Manage Voices.
+
+Save the chosen voice. Update `~/.claude-talk/config.env` by setting the VOICE line. Make sure to quote voice names with spaces (e.g., `VOICE="Daniel (Enhanced)"`).
 
 ### Question 2: Name
 

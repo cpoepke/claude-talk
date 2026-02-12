@@ -125,7 +125,7 @@ Settings live in `~/.claude-talk/config.env`:
 |---------|---------|-------------|
 | `AUDIO_DEVICE` | `1` | Microphone device index |
 | `MIC_GAIN` | `8.0` | Gain multiplier (built-in mic needs ~8.0, USB ~1.0) |
-| `VOICE` | `Daniel` | macOS TTS voice |
+| `VOICE` | `Daniel` | macOS TTS voice (use `say -v '?'` to list all; Enhanced variants sound best) |
 | `CAPTURE_MODE` | `wlk` | `wlk` (streaming) or `vad` (legacy batch) |
 | `SILENCE_SECS` | `2.0` | Seconds of silence to end an utterance |
 | `WLK_PORT` | `8090` | WhisperLiveKit server port |
