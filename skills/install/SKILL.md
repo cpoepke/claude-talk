@@ -217,4 +217,8 @@ Read back their choices in a brief summary, then play a final greeting in-charac
 say -v Daniel "Jarvis here, reporting for duty. I've got wit, charm, and questionable puns. What more could you want?"
 ```
 
-Then tell them: "You're all set! Run `/claude-talk:start` to start chatting. Re-run `/claude-talk:install` anytime to change your preferences."
+Then tell them:
+
+"You're all set! **One important step: restart Claude Code now** to enable the teams feature (I just configured it in your settings). Then run `/claude-talk:start` to start chatting.
+
+Re-run `/claude-talk:install` anytime to change your preferences."

@@ -90,6 +90,26 @@ Your personality is saved to `~/.claude-talk/personality.md` and loaded every ti
 - **Python 3.12** (`brew install python@3.12`)
 - **Working microphone**
 - **Claude Code** with active subscription
+- **Experimental teams feature** - Required for voice chat loop
+
+### Enable teams feature
+
+Claude Talk requires the experimental agent teams feature. Set this environment variable before launching Claude Code:
+
+```bash
+export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=true
+claude
+```
+
+Or add it permanently to your shell config:
+
+```bash
+# Add to ~/.zshrc or ~/.bashrc
+echo 'export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=true' >> ~/.zshrc
+source ~/.zshrc
+```
+
+The `/claude-talk:install` command will configure this automatically in your `~/.claude/settings.json`.
 
 Optional:
 - `ffmpeg` - for listing audio devices

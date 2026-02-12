@@ -37,12 +37,16 @@ fi
 
 # --- Check for Python 3.12 ---
 PYTHON=""
-for p in python3.12 python3; do
+# Prefer ARM64 Homebrew Python on Apple Silicon
+for p in /opt/homebrew/bin/python3.12 python3.12 python3; do
     if command -v "$p" >/dev/null 2>&1; then
         ver=$("$p" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+        arch=$("$p" -c 'import platform; print(platform.machine())')
         if [[ "$ver" == "3.12" ]]; then
             PYTHON="$p"
-            break
+            if [[ "$arch" == "arm64" ]]; then
+                break  # Found ARM64 Python, use it
+            fi
         fi
     fi
 done
@@ -81,7 +85,7 @@ fi
 
 echo "Installing packages (this may take a few minutes)..."
 "$WLK_VENV/bin/pip" install -q --upgrade pip
-"$WLK_VENV/bin/pip" install -q 'whisperlivekit[mlx-whisper]' mlx-whisper sounddevice websockets numpy
+"$WLK_VENV/bin/pip" install -q whisperlivekit mlx-whisper sounddevice websockets numpy
 echo "WhisperLiveKit environment ready."
 
 # --- VAD venv (lighter, for fallback) ---
@@ -134,9 +138,9 @@ else
     fi
 fi
 
-# --- Statusline setup ---
+# --- Claude Code settings ---
 echo ""
-echo "--- Setting up statusline ---"
+echo "--- Configuring Claude Code ---"
 chmod +x "$PROJECT_DIR/scripts/statusline.sh"
 
 SETTINGS_FILE="$HOME/.claude/settings.json"
@@ -159,20 +163,28 @@ if [[ -n "$EXISTING_CMD" && "$EXISTING_CMD" != *"statusline.sh"* ]]; then
     echo "Backed up existing statusline to ~/.claude-talk/statusline-backup.txt"
 fi
 
-# Update settings with our statusline command
+# Update settings with statusline and enable experimental teams feature
 echo "$SETTINGS" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 d['statusLine'] = {'type': 'command', 'command': sys.argv[1]}
+if 'env' not in d:
+    d['env'] = {}
+d['env']['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = 'true'
 json.dump(d, sys.stdout, indent=2)
 " "$STATUSLINE_CMD" > "${SETTINGS_FILE}.tmp"
 mv -f "${SETTINGS_FILE}.tmp" "$SETTINGS_FILE"
-echo "Configured Claude Code statusline."
+echo "✓ Configured statusline"
+echo "✓ Enabled experimental teams feature (required for voice chat)"
 
 echo ""
 echo "=== Installation complete! ==="
 echo ""
-echo "Next steps:"
+echo "IMPORTANT: Restart Claude Code to enable the teams feature:"
+echo "  1. Exit this session (Ctrl+D or /exit)"
+echo "  2. Launch claude again"
+echo ""
+echo "Then:"
 echo "  1. Check audio device index above and update ~/.claude-talk/config.env if needed"
 echo "  2. Start voice chat: /claude-talk:start"
 echo "  3. For help: /claude-talk:help"
