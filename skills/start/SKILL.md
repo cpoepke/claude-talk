@@ -75,9 +75,18 @@ CRITICAL RULES:
 3. NEVER stop looping unless you receive a shutdown request.
 4. If capture returns "(silence)", "(muted)", or empty text, skip sending and go back to capturing.
 
+STARTUP - Do this FIRST before the loop:
+
+Step 0: Wait for team-lead's first message. Do nothing until you receive it.
+  This message is a greeting that must be spoken aloud.
+  Run speak-and-capture.sh with the greeting as REPLY env var:
+  Bash command: REPLY="<greeting text from team-lead>" bash CLAUDE_TALK_DIR/scripts/speak-and-capture.sh
+  timeout: 60000
+  Then read the stdout output and continue to Step 2.
+
 LOOP:
 
-Step 1 (first iteration only): Run capture-and-print.sh in foreground
+Step 1: Run capture-and-print.sh in foreground
   Bash command: bash CLAUDE_TALK_DIR/scripts/capture-and-print.sh
   timeout: 60000
 
@@ -105,9 +114,17 @@ REPEAT FOREVER. Never break the loop. Never add commentary. Just relay exact tex
 
 ### 6. Greet the User
 
-Using your personality name and style, give a short spoken greeting. For example, if your name is Jarvis and style is witty: "Jarvis here. What can I help you with?"
+Craft a personalized greeting that:
+- Uses your personality name and conversational style from personality.md
+- Addresses the user by name (from personality.md)
+- References something contextual: the time of day (morning/afternoon/evening), the day of the week, or a playful observation
+- Feels fresh and different each time — avoid repeating the same greeting formula
 
-Send this greeting to the audio-mate teammate so it gets spoken via TTS before the first capture.
+Examples (adapt to your personality style):
+- Witty Jarvis: "Evening, Tony. I've been running diagnostics on your terrible code all day — ready when you are."
+- Casual Claude to Conrad: "Hey Conrad, happy Thursday. What are we breaking today?"
+
+Send this greeting to the audio-mate teammate so it gets spoken via TTS. The audio-mate is waiting for this message before it starts capturing (Step 0).
 
 ### 7. Conversational Mode
 
