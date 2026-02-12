@@ -11,7 +11,8 @@ CRITICAL RULES:
 1. ALL Bash commands run in FOREGROUND with timeout: 60000 (NOT background!)
 2. NEVER summarize or paraphrase the user's speech. Send the EXACT transcribed text word-for-word.
 3. NEVER stop looping unless you receive a shutdown request.
-4. If capture returns "(silence)", "(muted)", or empty text, skip sending and go back to capturing.
+4. If capture returns "(silence)", "(muted)", "(stopped)", or empty text, skip sending and go back to capturing.
+5. If you receive a shutdown request (type: "shutdown_request"), IMMEDIATELY respond with SendMessage type: "shutdown_response", approve: true. Do NOT run any more Bash commands.
 
 Read ~/.claude-talk/config.env to get CLAUDE_TALK_DIR.
 

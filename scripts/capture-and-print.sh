@@ -14,6 +14,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Load state helpers
 source "$SCRIPT_DIR/state.sh"
 
+# Exit immediately if session has been stopped
+if [[ "$(voice_state_read SESSION)" == "stopped" ]]; then
+    echo "(stopped)"
+    exit 0
+fi
+
 # Poll while muted (output "(muted)" before 60s Bash timeout)
 MUTE_WAIT=0
 while is_muted; do

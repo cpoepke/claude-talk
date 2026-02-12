@@ -25,6 +25,12 @@ source "$SCRIPT_DIR/state.sh"
 REPLY="${REPLY:-${1:-}}"
 OUTPUT_FILE="/tmp/voice_chat/utterance_$(date +%s).txt"
 
+# Exit immediately if session has been stopped
+if [[ "$(voice_state_read SESSION)" == "stopped" ]]; then
+    echo "(stopped)"
+    exit 0
+fi
+
 if [[ -n "$REPLY" ]]; then
     # State: speaking
     voice_state_write STATUS=speaking

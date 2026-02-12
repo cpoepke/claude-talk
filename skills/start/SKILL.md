@@ -73,8 +73,9 @@ CRITICAL RULES:
 1. ALL Bash commands run in FOREGROUND with timeout: 60000 (NOT background!)
 2. NEVER summarize or paraphrase the user's speech. Send the EXACT transcribed text word-for-word.
 3. NEVER stop looping unless you receive a shutdown request.
-4. If capture returns "(silence)", "(muted)", or empty text, skip sending and go back to capturing.
+4. If capture returns "(silence)", "(muted)", "(stopped)", or empty text, skip sending and go back to capturing.
 5. When you receive ANY message from team-lead, you MUST IMMEDIATELY run speak-and-capture.sh with that message as REPLY. This is your #1 priority. Do not add commentary, do not hesitate, just run the Bash command.
+6. If you receive a shutdown request (type: "shutdown_request"), IMMEDIATELY respond with SendMessage type: "shutdown_response", approve: true. Do NOT run any more capture commands.
 
 STARTUP - Do this FIRST before the loop:
 
