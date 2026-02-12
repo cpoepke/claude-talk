@@ -11,7 +11,30 @@ One-time setup: install dependencies, then personalize your voice assistant.
 
 ---
 
-## Part 1: Install Dependencies
+## Part 1: Check What's Already Set Up
+
+First, check what's already configured:
+
+1. Check if dependencies are installed: Does `~/.claude-talk/venvs/whisper-live/` directory exist?
+2. Check if personality is configured: Does `~/.claude-talk/personality.md` file exist?
+
+If `$ARGUMENTS` contains `--force`:
+- Reinstall dependencies and reconfigure personality regardless of what exists
+- Tell the user "Forcing full reinstall and reconfiguration..."
+
+Otherwise:
+- If BOTH dependencies AND personality exist, tell the user: "Everything is already set up! Use `--force` to reconfigure. Run `/claude-talk:start` to begin."
+- Then STOP. Do not proceed to Part 2 or Part 3.
+
+---
+
+## Part 2: Install Dependencies (if needed)
+
+**Skip this part if dependencies are already installed (unless --force was used).**
+
+If skipping, tell the user "Dependencies already installed, skipping..."
+
+Otherwise:
 
 1. Find the claude-talk plugin directory. It is whichever of these exists:
    - The current working directory (if it contains `scripts/install.sh`)
@@ -29,11 +52,17 @@ One-time setup: install dependencies, then personalize your voice assistant.
    - The detected audio devices (so they can verify their mic index)
    - That the Claude Code statusline was configured with a voice state indicator
 
-If install fails, stop here and help the user fix it. Otherwise continue to Part 2.
+If install fails, stop here and help the user fix it. Otherwise continue to Part 3.
 
 ---
 
-## Part 2: Personalize Your Assistant
+## Part 3: Personalize Your Assistant (if needed)
+
+**Skip this part if personality is already configured (unless --force was used).**
+
+If skipping, tell the user "Personality already configured. You're all set! Run `/claude-talk:start` to begin. Use `--force` to reconfigure."
+
+Otherwise:
 
 Walk the user through choosing their preferences. Use AskUserQuestion for each step. Keep it conversational and fun - this is the first impression.
 
@@ -90,7 +119,7 @@ Then use AskUserQuestion with header "Style" and these options:
 
 ---
 
-## Part 3: Fine-Tune Personality
+## Part 4: Fine-Tune Personality
 
 Three more questions to dial in the experience.
 
@@ -133,7 +162,7 @@ This is a free-text question. Do NOT use AskUserQuestion here. Simply ask the qu
 
 ---
 
-## Part 4: Save Personality
+## Part 5: Save Personality
 
 Write all choices to `~/.claude-talk/personality.md` using this exact format:
 
@@ -210,7 +239,7 @@ Write all choices to `~/.claude-talk/personality.md` using this exact format:
 
 ---
 
-## Part 5: Confirm
+## Part 6: Confirm
 
 Read back their choices in a brief summary, then play a final greeting in-character using the chosen voice, name, and style. For example if they picked Jarvis + Daniel + Witty:
 ```bash
@@ -219,6 +248,10 @@ say -v Daniel "Jarvis here, reporting for duty. I've got wit, charm, and questio
 
 Then tell them:
 
-"You're all set! **One important step: restart Claude Code now** to enable the teams feature (I just configured it in your settings). Then run `/claude-talk:start` to start chatting.
+If dependencies were just installed (Part 2 ran):
+"You're all set! **One important step: restart Claude Code now** to enable the teams feature (I just configured it in your settings). Then run `/claude-talk:start` to start chatting."
 
-Re-run `/claude-talk:install` anytime to change your preferences."
+If dependencies were skipped (already installed):
+"You're all set! Run `/claude-talk:start` to start chatting."
+
+Always add: "Re-run `/claude-talk:install --force` anytime to reconfigure."
