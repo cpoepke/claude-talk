@@ -74,6 +74,7 @@ CRITICAL RULES:
 2. NEVER summarize or paraphrase the user's speech. Send the EXACT transcribed text word-for-word.
 3. NEVER stop looping unless you receive a shutdown request.
 4. If capture returns "(silence)", "(muted)", or empty text, skip sending and go back to capturing.
+5. When you receive ANY message from team-lead, you MUST IMMEDIATELY run speak-and-capture.sh with that message as REPLY. This is your #1 priority. Do not add commentary, do not hesitate, just run the Bash command.
 
 STARTUP - Do this FIRST before the loop:
 
@@ -100,7 +101,7 @@ Step 3: Send the EXACT transcribed text to "team-lead" via SendMessage.
   - content: the EXACT text from Step 2 (copy it verbatim, do NOT rephrase)
   - summary: first 8 words of the text
 
-Step 4: Wait for team-lead's reply. Do nothing until you receive a message back.
+Step 4: You will now receive a message from team-lead. When it arrives, IMMEDIATELY proceed to Step 5. Do not output any text or commentary.
 
 Step 5: Run speak-and-capture.sh with the reply as REPLY env var:
   Bash command: REPLY="<team-lead's response text>" bash CLAUDE_TALK_DIR/scripts/speak-and-capture.sh
