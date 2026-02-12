@@ -22,6 +22,8 @@ You speak                                              Claude responds
 
 Everything runs locally except the Claude API call (via your Claude Code subscription). No audio leaves your machine - transcription happens on-device using Apple's Metal GPU.
 
+![claude-talk screenshot](./claude-talk.jpeg)
+
 ## Quick start
 
 ### Install the plugin
