@@ -163,6 +163,10 @@ audio-mate (haiku, foreground loop)        team-lead (you + Claude)
 
 The audio-mate uses Haiku for minimal cost (it only relays text, never thinks). The team lead (Opus/Sonnet) handles all the actual conversation.
 
+### Barge-in (interrupt Claude mid-speech)
+
+You can interrupt Claude while it's talking by speaking. The system detects your voice over the TTS output and immediately stops playback. This requires [BlackHole 2ch](docs/barge-in-setup.md) as a virtual audio loopback. Barge-in is enabled by default and silently disables if BlackHole isn't installed.
+
 ### Echo prevention
 
 `speak-and-capture.sh` sequences TTS and capture: it speaks the response first, waits for it to finish + 300ms settle time, then starts the microphone. Without this, the mic picks up the TTS response and feeds it back as the next "user" utterance.
