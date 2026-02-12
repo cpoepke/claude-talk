@@ -16,16 +16,25 @@ STATE_FILE="$HOME/.claude-talk/state"
 # Existing keys are updated; new keys are appended.
 # Usage: voice_state_write KEY1=val1 KEY2=val2 ...
 voice_state_write() {
-    local lockfile="${STATE_FILE}.lock"
+    local lockdir="${STATE_FILE}.lock"
     # Ensure directory exists
     mkdir -p "$(dirname "$STATE_FILE")"
 
-    # Acquire lock (fd 9) with timeout
-    exec 9>"$lockfile"
-    if ! flock -w 5 9; then
-        echo "voice_state_write: failed to acquire lock" >&2
-        return 1
-    fi
+    # Acquire lock via mkdir (atomic on all POSIX systems including macOS)
+    local retries=50
+    while ! mkdir "$lockdir" 2>/dev/null; do
+        retries=$((retries - 1))
+        if [[ $retries -le 0 ]]; then
+            # Stale lock - force remove and retry once
+            rm -rf "$lockdir"
+            if ! mkdir "$lockdir" 2>/dev/null; then
+                echo "voice_state_write: failed to acquire lock" >&2
+                return 1
+            fi
+            break
+        fi
+        sleep 0.1
+    done
 
     local tmp="${STATE_FILE}.tmp.$$"
     # Start from existing file or empty
@@ -49,8 +58,7 @@ voice_state_write() {
     mv -f "$tmp" "$STATE_FILE"
 
     # Release lock
-    flock -u 9
-    exec 9>&-
+    rm -rf "$lockdir"
 }
 
 # Read a single value from the state file.
