@@ -135,45 +135,38 @@ Find your mic device index:
 python3 -c "import sounddevice; print(sounddevice.query_devices())"
 ```
 
+## Barge-in (interrupt Claude mid-speech)
+
+Barge-in lets you interrupt Claude mid-sentence by speaking. Claude stops talking immediately and listens to what you say instead. Without it, you have to wait for Claude to finish before you can respond.
+
+This requires **BlackHole 2ch** as a virtual audio loopback. Barge-in is enabled by default and silently disables if BlackHole isn't installed.
+
+### Setup
+
+1. Install BlackHole:
+   ```bash
+   brew install blackhole-2ch
+   ```
+
+2. Open **Audio MIDI Setup**, click **+**, select **Create Multi-Output Device**
+
+3. Check both **BlackHole 2ch** and your speakers (speakers should be listed first)
+
+4. Set your system output to the new Multi-Output Device in **System Settings > Sound > Output**
+
+### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `BARGE_IN` | `true` | Set to `false` to force-disable |
+| `BLACKHOLE_DEVICE` | (auto) | Explicit device index for BlackHole |
+| `BARGE_IN_RATIO` | `0.4` | Mic/reference ratio threshold. Lower = more sensitive |
+
+See the [full barge-in guide](docs/barge-in-setup.md) for how the Geigel detection algorithm works, tuning advice, and troubleshooting.
+
 ## Architecture
 
-### Voice capture
-
-The system uses two capture modes:
-
-- **WLK (default)** - Streams mic audio via WebSocket to WhisperLiveKit, which runs Whisper via MLX on the Metal GPU. Transcription is real-time, word-by-word. End of utterance is detected when the transcription text stabilizes for 2 seconds.
-
-- **VAD (legacy)** - Energy-based voice activity detection captures audio locally, then sends the complete WAV to a whisper-cpp HTTP server for batch transcription. Simpler but higher latency.
-
-### Team architecture
-
-`/claude-talk:start` spawns a teammate called **audio-mate** that runs a foreground capture loop:
-
-```
-audio-mate (haiku, foreground loop)        team-lead (you + Claude)
-  |                                           |
-  | 1. capture-and-print.sh (blocks)          |
-  | 2. read transcription                     |
-  | 3. send exact text -----> SendMessage --> receives user's words
-  | 4. wait for reply  <----- SendMessage <-- thinks & responds
-  | 5. speak-and-capture.sh                   |
-  |    (TTS response, then capture next)      |
-  | 6. go to step 2                           |
-```
-
-The audio-mate uses Haiku for minimal cost (it only relays text, never thinks). The team lead (Opus/Sonnet) handles all the actual conversation.
-
-### Barge-in (interrupt Claude mid-speech)
-
-You can interrupt Claude while it's talking by speaking. The system detects your voice over the TTS output and immediately stops playback. This requires [BlackHole 2ch](docs/barge-in-setup.md) as a virtual audio loopback. Barge-in is enabled by default and silently disables if BlackHole isn't installed.
-
-### Echo prevention
-
-`speak-and-capture.sh` sequences TTS and capture: it speaks the response first, waits for it to finish + 300ms settle time, then starts the microphone. Without this, the mic picks up the TTS response and feeds it back as the next "user" utterance.
-
-### Microphone gain
-
-MacBook Pro built-in microphones produce very weak int16 signals (ambient RMS ~50, speech ~200). An 8x gain multiplier is applied before sending to WhisperLiveKit. External USB mics typically need ~1.0-2.0x. Too much gain (10x+) causes clipping, which Whisper interprets as `[Music]`.
+For details on the capture pipeline, team architecture, echo prevention, and microphone gain, see [docs/architecture.md](docs/architecture.md).
 
 ## File structure
 

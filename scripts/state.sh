@@ -16,9 +16,18 @@ STATE_FILE="$HOME/.claude-talk/state"
 # Existing keys are updated; new keys are appended.
 # Usage: voice_state_write KEY1=val1 KEY2=val2 ...
 voice_state_write() {
-    local tmp="${STATE_FILE}.tmp.$$"
+    local lockfile="${STATE_FILE}.lock"
     # Ensure directory exists
     mkdir -p "$(dirname "$STATE_FILE")"
+
+    # Acquire lock (fd 9) with timeout
+    exec 9>"$lockfile"
+    if ! flock -w 5 9; then
+        echo "voice_state_write: failed to acquire lock" >&2
+        return 1
+    fi
+
+    local tmp="${STATE_FILE}.tmp.$$"
     # Start from existing file or empty
     if [[ -f "$STATE_FILE" ]]; then
         cp "$STATE_FILE" "$tmp"
@@ -29,7 +38,6 @@ voice_state_write() {
         local key="${pair%%=*}"
         local val="${pair#*=}"
         if grep -q "^${key}=" "$tmp" 2>/dev/null; then
-            # Use grep -v + append instead of sed -i (more portable)
             local tmp2="${STATE_FILE}.tmp2.$$"
             grep -v "^${key}=" "$tmp" > "$tmp2" || true
             echo "${key}=${val}" >> "$tmp2"
@@ -39,6 +47,10 @@ voice_state_write() {
         fi
     done
     mv -f "$tmp" "$STATE_FILE"
+
+    # Release lock
+    flock -u 9
+    exec 9>&-
 }
 
 # Read a single value from the state file.

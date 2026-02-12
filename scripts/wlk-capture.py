@@ -76,7 +76,15 @@ async def capture_utterance(
     barge_in_enabled = tts_active and reference_device >= 0
     barge_in_triggered = False
 
-    async with websockets.connect(server_url) as ws:
+    try:
+        ws = await asyncio.wait_for(
+            websockets.connect(server_url), timeout=10.0
+        )
+    except (asyncio.TimeoutError, OSError) as e:
+        print(f"Failed to connect to WLK server: {e}", file=sys.stderr, flush=True)
+        return "(silence)"
+
+    async with ws:
         if tts_active:
             if barge_in_enabled:
                 print(
@@ -254,12 +262,22 @@ async def capture_utterance(
 
         async def recv_transcription():
             nonlocal text_result, last_text_change, got_text
+            idle_since = time.monotonic()
 
             while not done_event.is_set():
                 try:
                     msg = await asyncio.wait_for(ws.recv(), timeout=0.5)
+                    idle_since = time.monotonic()
                 except asyncio.TimeoutError:
+                    if time.monotonic() - idle_since > 30.0:
+                        print("WLK server unresponsive for 30s, aborting.", file=sys.stderr, flush=True)
+                        done_event.set()
+                        return
                     continue
+                except websockets.exceptions.ConnectionClosed as e:
+                    print(f"WLK connection lost: {e}", file=sys.stderr, flush=True)
+                    done_event.set()
+                    return
 
                 d = json.loads(msg)
                 lines_text = " ".join(
