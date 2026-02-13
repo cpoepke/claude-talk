@@ -4,9 +4,19 @@ Talk to Claude Code with your voice. Real-time speech-to-text, conversational AI
 
 > **macOS (Apple Silicon) only** - Requires M1/M2/M3/M4 for MLX-accelerated transcription.
 
+## Why claude-talk?
+
+- **Hands-free coding** — Talk through problems, review code, and give instructions without touching the keyboard
+- **Fully local audio** — Transcription runs on-device via Apple's Metal GPU. No audio leaves your machine, ever
+- **Real-time streaming** — WhisperLiveKit transcribes as you speak, not after. No awkward pauses waiting for processing
+- **Barge-in** — Interrupt Claude mid-sentence by speaking. No waiting for long responses to finish
+- **Personalized voice assistant** — Choose a name, voice, personality style, and verbosity level. It remembers who you are
+- **Zero-config start** — One install command, then `/claude-talk:start`. That's it
+- **Full Claude Code power** — Your voice assistant has the same capabilities as typed Claude Code: file editing, terminal commands, web search, everything
+
 ## How it works
 
-```
+```text
 You speak                                              Claude responds
     |                                                       |
     v                                                       v
@@ -44,17 +54,18 @@ cd claude-talk
 
 Open Claude Code in the plugin directory (or any project if installed via Option A/B) and run:
 
-```
+```text
 /claude-talk:install
 ```
 
 This will:
+
 1. Install Python dependencies (WhisperLiveKit, MLX Whisper, sounddevice)
 2. Walk you through a **spoken onboarding** - you'll hear each voice, pick a name, choose a personality style, and fine-tune how your assistant behaves
 
 ### Start talking
 
-```
+```text
 /claude-talk:start
 ```
 
@@ -65,7 +76,7 @@ Speak into your mic. Claude will listen, think, and respond out loud. Say "stop"
 The install command includes a personality setup where you choose:
 
 | Step | What you pick | How it's presented |
-|------|--------------|-------------------|
+| ---- | ------------- | ----------------- |
 | **Voice** | Daniel, Karen, Moira, or Samantha | Each voice speaks a unique sentence so you hear the difference |
 | **Name** | Claude, Jarvis, Friday, Nova, or custom | Each name is spoken in your chosen voice |
 | **Style** | Casual, Professional, Witty, or Calm | Sample sentences in each style, spoken in your voice |
@@ -78,7 +89,7 @@ Your personality is saved to `~/.claude-talk/personality.md` and loaded every ti
 ## Commands
 
 | Command | Description |
-|---------|-------------|
+| ------- | ----------- |
 | `/claude-talk:install` | Install dependencies + personality setup |
 | `/claude-talk:start` | Start continuous voice chat |
 | `/claude-talk:stop` | Stop voice chat |
@@ -92,28 +103,9 @@ Your personality is saved to `~/.claude-talk/personality.md` and loaded every ti
 - **Python 3.12** (`brew install python@3.12`)
 - **Working microphone**
 - **Claude Code** with active subscription
-- **Experimental teams feature** - Required for voice chat loop
-
-### Enable teams feature
-
-Claude Talk requires the experimental agent teams feature. Set this environment variable before launching Claude Code:
-
-```bash
-export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=true
-claude
-```
-
-Or add it permanently to your shell config:
-
-```bash
-# Add to ~/.zshrc or ~/.bashrc
-echo 'export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=true' >> ~/.zshrc
-source ~/.zshrc
-```
-
-The `/claude-talk:install` command will configure this automatically in your `~/.claude/settings.json`.
 
 Optional:
+
 - `ffmpeg` - for listing audio devices
 - `sox` - for audio analysis/debugging
 
@@ -122,7 +114,7 @@ Optional:
 Settings live in `~/.claude-talk/config.env`:
 
 | Setting | Default | Description |
-|---------|---------|-------------|
+| ------- | ------- | ----------- |
 | `AUDIO_DEVICE` | `1` | Microphone device index |
 | `MIC_GAIN` | `8.0` | Gain multiplier (built-in mic needs ~8.0, USB ~1.0) |
 | `VOICE` | `Daniel` | macOS TTS voice (use `say -v '?'` to list all; Enhanced variants sound best) |
@@ -131,6 +123,7 @@ Settings live in `~/.claude-talk/config.env`:
 | `WLK_PORT` | `8090` | WhisperLiveKit server port |
 
 Find your mic device index:
+
 ```bash
 python3 -c "import sounddevice; print(sounddevice.query_devices())"
 ```
@@ -144,6 +137,7 @@ This requires **BlackHole 2ch** as a virtual audio loopback. Barge-in is enabled
 ### Setup
 
 1. Install BlackHole:
+
    ```bash
    brew install blackhole-2ch
    ```
@@ -154,10 +148,10 @@ This requires **BlackHole 2ch** as a virtual audio loopback. Barge-in is enabled
 
 4. Set your system output to the new Multi-Output Device in **System Settings > Sound > Output**
 
-### Configuration
+### Barge-in configuration
 
 | Setting | Default | Description |
-|---------|---------|-------------|
+| ------- | ------- | ----------- |
 | `BARGE_IN` | `true` | Set to `false` to force-disable |
 | `BLACKHOLE_DEVICE` | (auto) | Explicit device index for BlackHole |
 | `BARGE_IN_RATIO` | `0.4` | Mic/reference ratio threshold. Lower = more sensitive |
@@ -166,35 +160,36 @@ See the [full barge-in guide](docs/barge-in-setup.md) for how the Geigel detecti
 
 ## Architecture
 
-For details on the capture pipeline, team architecture, echo prevention, and microphone gain, see [docs/architecture.md](docs/architecture.md).
+Voice chat uses a **Stop hook** instead of a teammate — zero extra Claude API overhead. The hook fires after each assistant response, speaks it via TTS, captures the user's next utterance, and injects it back into the conversation. Server-side buffering keeps the mic hot during Claude's thinking time.
+
+For details on the capture pipeline, hook architecture, echo prevention, and microphone gain, see [docs/architecture.md](docs/architecture.md).
 
 ## File structure
 
-```
+```text
 claude-talk/
+├── .claude/
+│   ├── hooks/
+│   │   └── voice-stop.sh         # Stop hook (voice conversation loop)
+│   └── settings.json             # Hook registration
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin manifest
+│   └── plugin.json               # Plugin manifest
 ├── skills/
-│   ├── install/SKILL.md         # Install + onboarding
-│   ├── start/SKILL.md           # Start voice chat
-│   ├── stop/SKILL.md            # Stop voice chat
-│   ├── chat/SKILL.md            # Quick single exchange
-│   ├── config/SKILL.md          # View/edit config
-│   └── help/SKILL.md            # Show help
-├── agents/
-│   └── audio-mate.md            # Capture loop teammate
+│   ├── install/SKILL.md          # Install + onboarding
+│   ├── start/SKILL.md            # Start voice chat
+│   ├── stop/SKILL.md             # Stop voice chat
+│   ├── chat/SKILL.md             # Quick single exchange
+│   ├── config/SKILL.md           # View/edit config
+│   └── help/SKILL.md             # Show help
+├── src/
+│   └── audio-server.py           # Audio server (TTS, capture, barge-in, WLK)
 ├── scripts/
-│   ├── install.sh               # Dependency installer
-│   ├── start-whisper-server.sh  # WLK/whisper-cpp launcher
-│   ├── capture-utterance.sh     # Capture one utterance
-│   ├── capture-and-print.sh     # Capture + print to stdout
-│   ├── speak-and-capture.sh     # TTS then capture (echo prevention)
-│   ├── wlk-capture.py           # WebSocket streaming capture
-│   └── vad-capture.py           # Energy-based VAD capture
+│   ├── install.sh                # Dependency installer
+│   └── ...                       # Legacy capture scripts
 ├── config/
-│   └── defaults.env             # Default configuration
-├── CLAUDE.md                    # Plugin context for Claude
-├── LICENSE                      # MIT
+│   └── defaults.env              # Default configuration
+├── CLAUDE.md                     # Plugin context for Claude
+├── LICENSE                       # MIT
 └── README.md
 ```
 
@@ -209,7 +204,7 @@ claude-talk/
 - Or lower `VAD_THRESHOLD` to capture quieter speech
 
 **Echo / hearing own response back**
-- The `speak-and-capture.sh` script handles this. If it persists, increase `SILENCE_SECS`
+- The audio server handles echo prevention by sequencing TTS and capture. If it persists, increase `SILENCE_SECS`
 
 **WhisperLiveKit won't start**
 - Check if port 8090 is in use: `lsof -i :8090`

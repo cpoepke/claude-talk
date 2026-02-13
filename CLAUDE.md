@@ -11,7 +11,7 @@ All processing is local except the Claude API call.
 ## Skills
 
 - `/claude-talk:install` - Install dependencies + personalize (name, voice, personality)
-- `/claude-talk:start` - Start voice chat (spawns audio teammate)
+- `/claude-talk:start` - Start voice chat (uses Stop hook loop)
 - `/claude-talk:stop` - Stop voice chat
 - `/claude-talk:chat` - Quick single voice exchange (no teammate)
 - `/claude-talk:config` - View/edit configuration
@@ -19,7 +19,8 @@ All processing is local except the Claude API call.
 
 ## Key paths
 
-- `scripts/` - Audio capture and transcription scripts
+- `src/audio-server.py` - Audio server (TTS, capture, barge-in, WLK)
+- `.claude/hooks/voice-stop.sh` - Stop hook (voice conversation loop)
 - `config/defaults.env` - Default configuration
 - `~/.claude-talk/config.env` - User overrides (created by install)
 - `~/.claude-talk/personality.md` - Name, voice, and personality (created by install)

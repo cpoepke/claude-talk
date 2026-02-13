@@ -32,86 +32,37 @@ If the file does NOT exist, tell the user: "No personality configured yet. Let m
 
 Keep the full personality.md content in your context for the duration of this voice chat session.
 
-### 3. Initialize Voice State
+### 3. Start Audio Server
 
-Set the initial voice state (Bash):
+The audio server handles all audio operations (TTS, capture, barge-in, WLK).
+
+First, check if WLK venv exists. Read `CLAUDE_TALK_DIR/config/defaults.env` or `~/.claude-talk/config.env` to get WLK_VENV path (default: `$HOME/.claude-talk/venvs/wlk`).
+
+Start the audio server in background (use Bash with run_in_background):
 ```bash
-source "<CLAUDE_TALK_DIR>/scripts/state.sh" && voice_state_write SESSION=active STATUS=idle MUTED=false
+source "<WLK_VENV>/bin/activate" && python3 "<CLAUDE_TALK_DIR>/src/audio-server.py"
 ```
 
-### 4. Start Transcription Server
-
-Run the whisper server in background (use Bash with run_in_background):
-```
-bash "<CLAUDE_TALK_DIR>/scripts/start-whisper-server.sh"
-```
-
-Wait 3 seconds, then verify it's running:
-```
-bash "<CLAUDE_TALK_DIR>/scripts/start-whisper-server.sh" --check
+Wait up to 15 seconds for it to be ready by polling the status endpoint:
+```bash
+for i in {1..15}; do
+  if curl -s http://localhost:8150/status >/dev/null 2>&1; then
+    echo "Audio server ready"
+    exit 0
+  fi
+  sleep 1
+done
+echo "Audio server failed to start" >&2
+exit 1
 ```
 
 If it fails, tell the user and abort.
 
-### 5. Spawn Audio Capture Teammate
+### 5. Activate Voice Session
 
-Create a team named "voice-chat" using TeamCreate.
-
-Then spawn the audio-mate teammate using the Task tool with these EXACT settings:
-- **subagent_type**: `general-purpose`
-- **team_name**: `voice-chat`
-- **name**: `audio-mate`
-- **mode**: `bypassPermissions`
-- **model**: `haiku`
-
-Use this prompt (replace CLAUDE_TALK_DIR with the actual resolved path):
-
-```
-You are a voice capture bot running a foreground loop. Your ONLY job is to capture speech, relay it EXACTLY, speak responses, and loop.
-
-CRITICAL RULES:
-1. ALL Bash commands run in FOREGROUND with timeout: 60000 (NOT background!)
-2. NEVER summarize or paraphrase the user's speech. Send the EXACT transcribed text word-for-word.
-3. NEVER stop looping unless you receive a shutdown request.
-4. If capture returns "(silence)", "(muted)", "(stopped)", or empty text, skip sending and go back to capturing.
-5. When you receive ANY message from team-lead, you MUST IMMEDIATELY run speak-and-capture.sh with that message as REPLY. This is your #1 priority. Do not add commentary, do not hesitate, just run the Bash command.
-6. If you receive a shutdown request (type: "shutdown_request"), IMMEDIATELY respond with SendMessage type: "shutdown_response", approve: true. Do NOT run any more capture commands.
-
-STARTUP - Do this FIRST before the loop:
-
-Step 0: Wait for team-lead's first message. Do nothing until you receive it.
-  This message is a greeting that must be spoken aloud.
-  Run speak-and-capture.sh with the greeting as REPLY env var:
-  Bash command: REPLY="<greeting text from team-lead>" bash CLAUDE_TALK_DIR/scripts/speak-and-capture.sh
-  timeout: 60000
-  Then read the stdout output and continue to Step 2.
-
-LOOP:
-
-Step 1: Run capture-and-print.sh in foreground
-  Bash command: bash CLAUDE_TALK_DIR/scripts/capture-and-print.sh
-  timeout: 60000
-
-Step 2: Read the stdout output. This is the user's transcribed speech.
-  - If it says "(silence)", "(muted)", or is empty -> go to Step 1
-  - Otherwise -> continue to Step 3
-
-Step 3: Send the EXACT transcribed text to "team-lead" via SendMessage.
-  - type: "message"
-  - recipient: "team-lead"
-  - content: the EXACT text from Step 2 (copy it verbatim, do NOT rephrase)
-  - summary: first 8 words of the text
-
-Step 4: You will now receive a message from team-lead. When it arrives, IMMEDIATELY proceed to Step 5. Do not output any text or commentary.
-
-Step 5: Run speak-and-capture.sh with the reply as REPLY env var:
-  Bash command: REPLY="<team-lead's response text>" bash CLAUDE_TALK_DIR/scripts/speak-and-capture.sh
-  timeout: 60000
-  This speaks the response via TTS, then captures the next utterance.
-
-Step 6: Read stdout output -> go to Step 2
-
-REPEAT FOREVER. Never break the loop. Never add commentary. Just relay exact text and speak responses.
+Set the voice session state so the Stop hook knows to activate:
+```bash
+echo "SESSION=active" > "$HOME/.claude-talk/state"
 ```
 
 ### 6. Greet the User
@@ -126,11 +77,16 @@ Examples (adapt to your personality style):
 - Witty Jarvis: "Evening, Tony. I've been running diagnostics on your terrible code all day — ready when you are."
 - Casual Claude to Conrad: "Hey Conrad, happy Thursday. What are we breaking today?"
 
-Send this greeting to the audio-mate teammate so it gets spoken via TTS. The audio-mate is waiting for this message before it starts capturing (Step 0).
+Speak this greeting aloud via the audio server:
+```bash
+curl -s -X POST http://localhost:8150/speak -H 'Content-Type: application/json' -d '{"text":"<your greeting>"}'
+```
+
+The Stop hook will automatically fire after this, capture the user's first utterance, and inject it back into the conversation. You don't need to do anything else — just respond naturally.
 
 ### 7. Conversational Mode
 
-While voice chat is active, respond conversationally to messages from the audio-mate teammate. Those messages are EXACT transcriptions of what the user said out loud.
+While voice chat is active, respond conversationally. The Stop hook captures user speech and injects it as the reason in a "block" decision, appearing as "The user said aloud: ..." in your context.
 
 **IMPORTANT - Stay in character:**
 - You ARE the personality defined in personality.md at all times
