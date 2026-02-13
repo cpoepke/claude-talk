@@ -85,7 +85,7 @@ fi
 
 echo "Installing packages (this may take a few minutes)..."
 "$WLK_VENV/bin/pip" install -q --upgrade pip
-"$WLK_VENV/bin/pip" install -q whisperlivekit mlx-whisper sounddevice websockets numpy
+"$WLK_VENV/bin/pip" install -q whisperlivekit mlx-whisper sounddevice websockets numpy fastapi uvicorn pydantic
 echo "WhisperLiveKit environment ready."
 
 # --- VAD venv (lighter, for fallback) ---

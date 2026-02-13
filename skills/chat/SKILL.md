@@ -10,29 +10,30 @@ Single voice exchange without starting a full voice chat session. Good for quick
 
 ## Prerequisites
 
-The WhisperLiveKit server must be running. If not, start it first:
-```
-bash "<CLAUDE_TALK_DIR>/scripts/start-whisper-server.sh" &
-```
+The audio server must be running. If not, start it first by following the audio server startup steps from the start skill.
 
 ## Steps
 
-1. Load config: read `~/.claude-talk/config.env` for `CLAUDE_TALK_DIR`, then source `<CLAUDE_TALK_DIR>/config/defaults.env`.
+1. Check if audio server is running:
+   ```bash
+   curl -s http://localhost:8150/status >/dev/null 2>&1
+   ```
+   If it fails, tell the user the audio server isn't running and they should start a voice chat session first with `/claude-talk:start`, or you can start the server for them.
 
 2. Capture one utterance (use Bash with timeout 60000):
+   ```bash
+   curl -s http://localhost:8150/listen
    ```
-   bash "<CLAUDE_TALK_DIR>/scripts/capture-and-print.sh"
-   ```
+   Parse the JSON response to extract the "text" field.
 
-3. Read the stdout output. If empty or "(silence)", tell the user no speech was detected.
+3. If text is empty, "(silence)", or "(muted)", tell the user no speech was detected.
 
 4. Otherwise, respond conversationally to what the user said. Keep the response natural and concise.
 
 5. Speak the response via TTS (use Bash):
+   ```bash
+   curl -s -X POST http://localhost:8150/speak -H 'Content-Type: application/json' -d '{"text":"<your response>"}'
    ```
-   say -v "$VOICE" "<your response>"
-   ```
-   Use the VOICE from config (default: Daniel).
 
 6. Show the exchange to the user:
    - "You said: <transcription>"

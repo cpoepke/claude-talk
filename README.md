@@ -4,9 +4,19 @@ Talk to Claude Code with your voice. Real-time speech-to-text, conversational AI
 
 > **macOS (Apple Silicon) only** - Requires M1/M2/M3/M4 for MLX-accelerated transcription.
 
+## Why claude-talk?
+
+- **Hands-free coding** — Talk through problems, review code, and give instructions without touching the keyboard
+- **Fully local audio** — Transcription runs on-device via Apple's Metal GPU. No audio leaves your machine, ever
+- **Real-time streaming** — WhisperLiveKit transcribes as you speak, not after. No awkward pauses waiting for processing
+- **Barge-in** — Interrupt Claude mid-sentence by speaking. No waiting for long responses to finish
+- **Personalized voice assistant** — Choose a name, voice, personality style, and verbosity level. It remembers who you are
+- **Zero-config start** — One install command, then `/claude-talk:start`. That's it
+- **Full Claude Code power** — Your voice assistant has the same capabilities as typed Claude Code: file editing, terminal commands, web search, everything
+
 ## How it works
 
-```
+```text
 You speak                                              Claude responds
     |                                                       |
     v                                                       v
@@ -44,17 +54,18 @@ cd claude-talk
 
 Open Claude Code in the plugin directory (or any project if installed via Option A/B) and run:
 
-```
+```text
 /claude-talk:install
 ```
 
 This will:
+
 1. Install Python dependencies (WhisperLiveKit, MLX Whisper, sounddevice)
 2. Walk you through a **spoken onboarding** - you'll hear each voice, pick a name, choose a personality style, and fine-tune how your assistant behaves
 
 ### Start talking
 
-```
+```text
 /claude-talk:start
 ```
 
@@ -65,7 +76,7 @@ Speak into your mic. Claude will listen, think, and respond out loud. Say "stop"
 The install command includes a personality setup where you choose:
 
 | Step | What you pick | How it's presented |
-|------|--------------|-------------------|
+| ---- | ------------- | ----------------- |
 | **Voice** | Daniel, Karen, Moira, or Samantha | Each voice speaks a unique sentence so you hear the difference |
 | **Name** | Claude, Jarvis, Friday, Nova, or custom | Each name is spoken in your chosen voice |
 | **Style** | Casual, Professional, Witty, or Calm | Sample sentences in each style, spoken in your voice |
@@ -78,7 +89,7 @@ Your personality is saved to `~/.claude-talk/personality.md` and loaded every ti
 ## Commands
 
 | Command | Description |
-|---------|-------------|
+| ------- | ----------- |
 | `/claude-talk:install` | Install dependencies + personality setup |
 | `/claude-talk:start` | Start continuous voice chat |
 | `/claude-talk:stop` | Stop voice chat |
@@ -114,6 +125,7 @@ source ~/.zshrc
 The `/claude-talk:install` command will configure this automatically in your `~/.claude/settings.json`.
 
 Optional:
+
 - `ffmpeg` - for listing audio devices
 - `sox` - for audio analysis/debugging
 
@@ -122,7 +134,7 @@ Optional:
 Settings live in `~/.claude-talk/config.env`:
 
 | Setting | Default | Description |
-|---------|---------|-------------|
+| ------- | ------- | ----------- |
 | `AUDIO_DEVICE` | `1` | Microphone device index |
 | `MIC_GAIN` | `8.0` | Gain multiplier (built-in mic needs ~8.0, USB ~1.0) |
 | `VOICE` | `Daniel` | macOS TTS voice (use `say -v '?'` to list all; Enhanced variants sound best) |
@@ -131,6 +143,7 @@ Settings live in `~/.claude-talk/config.env`:
 | `WLK_PORT` | `8090` | WhisperLiveKit server port |
 
 Find your mic device index:
+
 ```bash
 python3 -c "import sounddevice; print(sounddevice.query_devices())"
 ```
@@ -144,6 +157,7 @@ This requires **BlackHole 2ch** as a virtual audio loopback. Barge-in is enabled
 ### Setup
 
 1. Install BlackHole:
+
    ```bash
    brew install blackhole-2ch
    ```
@@ -154,10 +168,10 @@ This requires **BlackHole 2ch** as a virtual audio loopback. Barge-in is enabled
 
 4. Set your system output to the new Multi-Output Device in **System Settings > Sound > Output**
 
-### Configuration
+### Barge-in configuration
 
 | Setting | Default | Description |
-|---------|---------|-------------|
+| ------- | ------- | ----------- |
 | `BARGE_IN` | `true` | Set to `false` to force-disable |
 | `BLACKHOLE_DEVICE` | (auto) | Explicit device index for BlackHole |
 | `BARGE_IN_RATIO` | `0.4` | Mic/reference ratio threshold. Lower = more sensitive |
@@ -170,7 +184,7 @@ For details on the capture pipeline, team architecture, echo prevention, and mic
 
 ## File structure
 
-```
+```text
 claude-talk/
 ├── .claude-plugin/
 │   └── plugin.json              # Plugin manifest
