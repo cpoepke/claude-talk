@@ -103,26 +103,6 @@ Your personality is saved to `~/.claude-talk/personality.md` and loaded every ti
 - **Python 3.12** (`brew install python@3.12`)
 - **Working microphone**
 - **Claude Code** with active subscription
-- **Experimental teams feature** - Required for voice chat loop
-
-### Enable teams feature
-
-Claude Talk requires the experimental agent teams feature. Set this environment variable before launching Claude Code:
-
-```bash
-export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=true
-claude
-```
-
-Or add it permanently to your shell config:
-
-```bash
-# Add to ~/.zshrc or ~/.bashrc
-echo 'export CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=true' >> ~/.zshrc
-source ~/.zshrc
-```
-
-The `/claude-talk:install` command will configure this automatically in your `~/.claude/settings.json`.
 
 Optional:
 
@@ -180,35 +160,36 @@ See the [full barge-in guide](docs/barge-in-setup.md) for how the Geigel detecti
 
 ## Architecture
 
-For details on the capture pipeline, team architecture, echo prevention, and microphone gain, see [docs/architecture.md](docs/architecture.md).
+Voice chat uses a **Stop hook** instead of a teammate — zero extra Claude API overhead. The hook fires after each assistant response, speaks it via TTS, captures the user's next utterance, and injects it back into the conversation. Server-side buffering keeps the mic hot during Claude's thinking time.
+
+For details on the capture pipeline, hook architecture, echo prevention, and microphone gain, see [docs/architecture.md](docs/architecture.md).
 
 ## File structure
 
 ```text
 claude-talk/
+├── .claude/
+│   ├── hooks/
+│   │   └── voice-stop.sh         # Stop hook (voice conversation loop)
+│   └── settings.json             # Hook registration
 ├── .claude-plugin/
-│   └── plugin.json              # Plugin manifest
+│   └── plugin.json               # Plugin manifest
 ├── skills/
-│   ├── install/SKILL.md         # Install + onboarding
-│   ├── start/SKILL.md           # Start voice chat
-│   ├── stop/SKILL.md            # Stop voice chat
-│   ├── chat/SKILL.md            # Quick single exchange
-│   ├── config/SKILL.md          # View/edit config
-│   └── help/SKILL.md            # Show help
-├── agents/
-│   └── audio-mate.md            # Capture loop teammate
+│   ├── install/SKILL.md          # Install + onboarding
+│   ├── start/SKILL.md            # Start voice chat
+│   ├── stop/SKILL.md             # Stop voice chat
+│   ├── chat/SKILL.md             # Quick single exchange
+│   ├── config/SKILL.md           # View/edit config
+│   └── help/SKILL.md             # Show help
+├── src/
+│   └── audio-server.py           # Audio server (TTS, capture, barge-in, WLK)
 ├── scripts/
-│   ├── install.sh               # Dependency installer
-│   ├── start-whisper-server.sh  # WLK/whisper-cpp launcher
-│   ├── capture-utterance.sh     # Capture one utterance
-│   ├── capture-and-print.sh     # Capture + print to stdout
-│   ├── speak-and-capture.sh     # TTS then capture (echo prevention)
-│   ├── wlk-capture.py           # WebSocket streaming capture
-│   └── vad-capture.py           # Energy-based VAD capture
+│   ├── install.sh                # Dependency installer
+│   └── ...                       # Legacy capture scripts
 ├── config/
-│   └── defaults.env             # Default configuration
-├── CLAUDE.md                    # Plugin context for Claude
-├── LICENSE                      # MIT
+│   └── defaults.env              # Default configuration
+├── CLAUDE.md                     # Plugin context for Claude
+├── LICENSE                       # MIT
 └── README.md
 ```
 
@@ -223,7 +204,7 @@ claude-talk/
 - Or lower `VAD_THRESHOLD` to capture quieter speech
 
 **Echo / hearing own response back**
-- The `speak-and-capture.sh` script handles this. If it persists, increase `SILENCE_SECS`
+- The audio server handles echo prevention by sequencing TTS and capture. If it persists, increase `SILENCE_SECS`
 
 **WhisperLiveKit won't start**
 - Check if port 8090 is in use: `lsof -i :8090`

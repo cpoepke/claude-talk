@@ -312,6 +312,10 @@ class AudioEngine:
         self.ref_stream: sd.InputStream | None = None
         self.lock = asyncio.Lock()  # Serialize capture operations
 
+        # Buffered listen: pre-captured text from /queue-listen
+        self._buffered_text: str | None = None
+        self._buffer_task: asyncio.Task | None = None
+
         print(f"AudioEngine initialized:")
         print(f"  Mic device: {self.device_index}, gain: {self.gain}")
         print(f"  TTS voice: {self.voice}")
@@ -359,10 +363,74 @@ class AudioEngine:
             finally:
                 self.state.set(STATUS="idle")
 
+    async def queue_listen(self):
+        """Start capturing in background. Result stored in _buffered_text."""
+        await self._cancel_buffer()
+        self._buffered_text = None
+        self._buffer_task = asyncio.create_task(self._run_buffered_listen())
+
+    async def _run_buffered_listen(self):
+        """Background capture task — stores result in _buffered_text."""
+        try:
+            async with self.lock:
+                if self._is_muted():
+                    self._buffered_text = "(muted)"
+                    return
+                self.state.set(STATUS="listening")
+                self.logger.log_event("BUFFER_LISTEN_START")
+                try:
+                    text = await self._capture_utterance()
+                    self._buffered_text = text if text else "(silence)"
+                    self.logger.log_event("BUFFER_LISTEN_END", {"text": self._buffered_text})
+                finally:
+                    self.state.set(STATUS="idle")
+        except asyncio.CancelledError:
+            self.logger.log_event("BUFFER_LISTEN_CANCELLED")
+
+    async def _cancel_buffer(self):
+        """Cancel any running buffer task."""
+        if self._buffer_task and not self._buffer_task.done():
+            self._buffer_task.cancel()
+            try:
+                await self._buffer_task
+            except asyncio.CancelledError:
+                pass
+            self._buffer_task = None
+
+    def drain_buffer(self) -> str | None:
+        """Return buffered text if available, clearing it."""
+        if self._buffered_text is not None:
+            text = self._buffered_text
+            self._buffered_text = None
+            self._buffer_task = None
+            return text
+        if self._buffer_task and self._buffer_task.done():
+            self._buffer_task = None
+        return None
+
     async def speak_and_listen(self, text: str) -> str:
         """
         Speak text, then capture utterance (with barge-in if enabled).
+        Checks buffer first — if user already spoke during the gap, just speak and return that.
         """
+        buffered = self.drain_buffer()
+        if buffered and buffered not in ("(silence)", "(muted)"):
+            self.logger.log_event("BUFFER_HIT", {"buffered_text": buffered})
+            # User already spoke — just do TTS, no capture needed
+            pid = await self.speak(text)
+            if pid:
+                while True:
+                    try:
+                        os.kill(pid, 0)
+                        await asyncio.sleep(0.1)
+                    except ProcessLookupError:
+                        break
+            self.state.set(STATUS="idle")
+            return buffered
+
+        # Cancel any stale buffer task before acquiring lock
+        await self._cancel_buffer()
+
         async with self.lock:
             if self._is_muted():
                 # Still speak, but don't capture
@@ -715,6 +783,14 @@ async def listen() -> TextResponse:
     text = await audio_engine.listen()
     event_logger.log_event("API_LISTEN_END", {"text": text})
     return TextResponse(text=text)
+
+
+@app.post("/queue-listen")
+async def queue_listen() -> dict[str, str]:
+    """Start listening in background. Result buffered for next /speak-and-listen."""
+    event_logger.log_event("API_QUEUE_LISTEN")
+    await audio_engine.queue_listen()
+    return {"status": "ok"}
 
 
 @app.post("/speak")

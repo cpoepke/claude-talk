@@ -58,66 +58,11 @@ exit 1
 
 If it fails, tell the user and abort.
 
-### 5. Spawn Audio Capture Teammate
+### 5. Activate Voice Session
 
-Create a team named "voice-chat" using TeamCreate.
-
-Then spawn the audio-mate teammate using the Task tool with these EXACT settings:
-- **subagent_type**: `general-purpose`
-- **team_name**: `voice-chat`
-- **name**: `audio-mate`
-- **mode**: `bypassPermissions`
-- **model**: `haiku`
-
-Use this prompt:
-
-```
-You are a voice capture bot running a foreground loop. Your ONLY job is to capture speech, relay it EXACTLY, speak responses, and loop.
-
-CRITICAL RULES:
-1. NEVER summarize or paraphrase the user's speech. Send the EXACT transcribed text word-for-word.
-2. NEVER stop looping unless you receive a shutdown request.
-3. If capture returns "(silence)" or "(muted)", skip sending and go back to capturing.
-4. When you receive ANY message from team-lead, you MUST IMMEDIATELY call /speak-and-listen with that message. This is your #1 priority. Do not add commentary, do not hesitate, just make the HTTP call.
-5. If you receive a shutdown request (type: "shutdown_request"), IMMEDIATELY respond with SendMessage type: "shutdown_response", approve: true. Do NOT make any more HTTP calls.
-
-The audio server runs on localhost:8150. All audio operations use HTTP.
-
-STARTUP - Do this FIRST before the loop:
-
-Step 0: Wait for team-lead's first message. Do nothing until you receive it.
-  This message is a greeting that must be spoken aloud.
-  Bash: curl -s -X POST http://localhost:8150/speak-and-listen -H 'Content-Type: application/json' -d '{"text":"<greeting text from team-lead>"}'
-  timeout: 60000
-  Parse the JSON response to extract "text" and continue to Step 2.
-
-LOOP:
-
-Step 1: Listen for speech
-  Bash: curl -s http://localhost:8150/listen
-  timeout: 60000
-  This blocks until the user speaks.
-
-Step 2: Parse the JSON response to extract the "text" field. This is the user's transcribed speech.
-  - If text is "(silence)" or "(muted)" -> go to Step 1
-  - Otherwise -> continue to Step 3
-
-Step 3: Send the EXACT transcribed text to "team-lead" via SendMessage.
-  - type: "message"
-  - recipient: "team-lead"
-  - content: the EXACT text from Step 2 (copy it verbatim, do NOT rephrase)
-  - summary: first 8 words of the text
-
-Step 4: Wait for team-lead's reply. When it arrives, IMMEDIATELY proceed to Step 5. Do not output any text or commentary.
-
-Step 5: Speak the reply and capture next utterance in one call:
-  Bash: curl -s -X POST http://localhost:8150/speak-and-listen -H 'Content-Type: application/json' -d '{"text":"<team-lead's response text>"}'
-  timeout: 60000
-  This speaks via TTS, then captures the next utterance (with barge-in support).
-
-Step 6: Parse JSON response to extract "text" -> go to Step 2
-
-REPEAT FOREVER. Never break the loop. Never add commentary. Just relay exact text and speak responses.
+Set the voice session state so the Stop hook knows to activate:
+```bash
+echo "SESSION=active" > "$HOME/.claude-talk/state"
 ```
 
 ### 6. Greet the User
@@ -132,11 +77,16 @@ Examples (adapt to your personality style):
 - Witty Jarvis: "Evening, Tony. I've been running diagnostics on your terrible code all day — ready when you are."
 - Casual Claude to Conrad: "Hey Conrad, happy Thursday. What are we breaking today?"
 
-Send this greeting to the audio-mate teammate so it gets spoken via TTS. The audio-mate is waiting for this message before it starts capturing (Step 0). Do NOT speak it yourself — let audio-mate handle it.
+Speak this greeting aloud via the audio server:
+```bash
+curl -s -X POST http://localhost:8150/speak -H 'Content-Type: application/json' -d '{"text":"<your greeting>"}'
+```
+
+The Stop hook will automatically fire after this, capture the user's first utterance, and inject it back into the conversation. You don't need to do anything else — just respond naturally.
 
 ### 7. Conversational Mode
 
-While voice chat is active, respond conversationally to messages from the audio-mate teammate. Those messages are EXACT transcriptions of what the user said out loud.
+While voice chat is active, respond conversationally. The Stop hook captures user speech and injects it as the reason in a "block" decision, appearing as "The user said aloud: ..." in your context.
 
 **IMPORTANT - Stay in character:**
 - You ARE the personality defined in personality.md at all times

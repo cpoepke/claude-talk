@@ -8,23 +8,53 @@ The system uses two capture modes:
 
 - **VAD (legacy)** - Energy-based voice activity detection captures audio locally, then sends the complete WAV to a whisper-cpp HTTP server for batch transcription. Simpler but higher latency.
 
-## Team architecture
+## Stop hook architecture
 
-`/claude-talk:start` spawns a teammate called **audio-mate** that runs a foreground capture loop:
+`/claude-talk:start` activates a **Stop hook** that drives the voice conversation loop with zero extra Claude API overhead:
 
 ```
-audio-mate (haiku, foreground loop)        team-lead (you + Claude)
-  |                                           |
-  | 1. capture-and-print.sh (blocks)          |
-  | 2. read transcription                     |
-  | 3. send exact text -----> SendMessage --> receives user's words
-  | 4. wait for reply  <----- SendMessage <-- thinks & responds
-  | 5. speak-and-capture.sh                   |
-  |    (TTS response, then capture next)      |
-  | 6. go to step 2                           |
+Claude responds with text
+    |
+    v
+Stop hook fires (bash script)
+    |
+    v
+Extract last assistant message from transcript JSONL
+    |
+    v
+POST /speak-and-listen (TTS + mic capture, with barge-in)
+    |
+    v
+User speaks → transcription returned
+    |
+    v
+Hook returns decision:"block" with reason:"The user said aloud: <text>"
+    |
+    v
+Claude sees the speech as context, responds → Stop hook fires → loop
 ```
 
-The audio-mate uses Haiku for minimal cost (it only relays text, never thinks). The team lead (Opus/Sonnet) handles all the actual conversation.
+The hook is a bash script (`.claude/hooks/voice-stop.sh`). It makes HTTP calls to the audio server — no Claude API calls, no context accumulation. The loop breaks when `SESSION` in `~/.claude-talk/state` is set to `stopped` (via `/claude-talk:stop`).
+
+### Server-side buffering
+
+To minimize the gap between hook invocations (while Claude is thinking), the hook calls `POST /queue-listen` before returning. This starts a background capture on the audio server. When the next `/speak-and-listen` fires, it checks for buffered speech first — if the user already spoke during the thinking gap, it skips capture and just does TTS.
+
+## Audio server
+
+`src/audio-server.py` is a FastAPI server that handles all audio operations:
+
+| Endpoint | Description |
+| -------- | ----------- |
+| `GET /listen` | Block until user speaks, return transcription |
+| `POST /speak-and-listen` | TTS + capture in one call (checks buffer first) |
+| `POST /speak` | TTS only |
+| `POST /queue-listen` | Start background capture for buffering |
+| `GET /status` | Current state |
+| `POST /mute` / `POST /unmute` | Mic control |
+| `POST /stop` | Graceful shutdown |
+
+The server manages the WLK subprocess with auto-restart and serializes capture operations with an async lock.
 
 ## Barge-in (interrupt mid-speech)
 
@@ -32,7 +62,7 @@ You can interrupt Claude while it's talking by speaking. Uses Geigel double-talk
 
 ## Echo prevention
 
-`speak-and-capture.sh` sequences TTS and capture: it speaks the response first, waits for it to finish + 300ms settle time, then starts the microphone. Without this, the mic picks up the TTS response and feeds it back as the next "user" utterance.
+The audio server sequences TTS and capture: it speaks the response first, waits for it to finish, then starts sending mic audio to WLK. When barge-in is enabled, the mic stream starts during TTS but audio is only sent to WLK after TTS finishes (or after barge-in is detected).
 
 ## Microphone gain
 
