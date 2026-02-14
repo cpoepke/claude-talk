@@ -38,6 +38,25 @@ if [[ -f "$STATE_FILE" ]]; then
     if [[ "$SESSION" == "active" ]]; then
         STATUS=$(grep "^STATUS=" "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo "")
         MUTED=$(grep "^MUTED=" "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo "")
+        # Fetch live device info from audio server
+        DEVICE_INFO=""
+        SERVER_JSON=$(curl -s --max-time 1 http://localhost:8150/status 2>/dev/null || echo "")
+        if [[ -n "$SERVER_JSON" ]]; then
+            INPUT_DEV=$(echo "$SERVER_JSON" | jq -r '.input_device // empty' 2>/dev/null || echo "")
+            OUTPUT_DEV=$(echo "$SERVER_JSON" | jq -r '.output_device // empty' 2>/dev/null || echo "")
+            BARGE=$(echo "$SERVER_JSON" | jq -r '.barge_in // empty' 2>/dev/null || echo "")
+            # Shorten common prefixes
+            SHORT_IN=$(echo "$INPUT_DEV" | sed 's/MacBook Pro-//')
+            SHORT_OUT=$(echo "$OUTPUT_DEV" | sed 's/MacBook Pro-//')
+            [[ -n "$SHORT_IN" ]] && DEVICE_INFO="🎤 ${SHORT_IN}"
+            [[ -n "$SHORT_OUT" ]] && DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }🔈 ${SHORT_OUT}"
+            if [[ "$BARGE" == "true" ]]; then
+                DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }⚡ barge-in:on"
+            else
+                DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }barge-in:off"
+            fi
+        fi
+
         if [[ "$MUTED" == "true" ]]; then
             # Red - muted
             VOICE_INDICATOR="\033[31m🚫 muted\033[0m"
@@ -51,15 +70,18 @@ if [[ -f "$STATE_FILE" ]]; then
             # Dim - idle (session active but between turns)
             VOICE_INDICATOR="\033[2m🎙 idle\033[0m"
         fi
+        # Append device info with pipe separator
+        [[ -n "$DEVICE_INFO" ]] && VOICE_INDICATOR="${VOICE_INDICATOR} \033[2m| ${DEVICE_INFO}\033[0m"
     fi
 fi
 
-# Build output
+# Build output with pipe separators
+SEP=" \033[2m|\033[0m "
 OUTPUT=""
 [[ -n "$MODEL" ]] && OUTPUT="\033[35m${MODEL}\033[0m"
-[[ -n "$DIR_NAME" ]] && OUTPUT="${OUTPUT:+$OUTPUT }\033[36m${DIR_NAME}\033[0m"
-[[ -n "$TEAM" ]] && OUTPUT="${OUTPUT:+$OUTPUT }\033[33mteam:${TEAM}\033[0m"
-[[ -n "$GIT_STATUS" ]] && OUTPUT="${OUTPUT:+$OUTPUT }\033[34m${GIT_STATUS}\033[0m"
-[[ -n "$VOICE_INDICATOR" ]] && OUTPUT="${OUTPUT:+$OUTPUT }${VOICE_INDICATOR}"
+[[ -n "$DIR_NAME" ]] && OUTPUT="${OUTPUT:+$OUTPUT${SEP}}\033[36m${DIR_NAME}\033[0m"
+[[ -n "$TEAM" ]] && OUTPUT="${OUTPUT:+$OUTPUT${SEP}}\033[33mteam:${TEAM}\033[0m"
+[[ -n "$GIT_STATUS" ]] && OUTPUT="${OUTPUT:+$OUTPUT${SEP}}\033[34m${GIT_STATUS}\033[0m"
+[[ -n "$VOICE_INDICATOR" ]] && OUTPUT="${OUTPUT:+$OUTPUT${SEP}}${VOICE_INDICATOR}"
 
 printf "%b" "$OUTPUT"

@@ -84,12 +84,7 @@ Examples (adapt to your personality style):
 - Witty Jarvis: "Evening, Tony. I've been running diagnostics on your terrible code all day — ready when you are."
 - Casual Claude to Conrad: "Hey Conrad, happy Thursday. What are we breaking today?"
 
-Speak this greeting aloud via the audio server:
-```bash
-curl -s -X POST http://localhost:8150/speak -H 'Content-Type: application/json' -d '{"text":"<your greeting>"}'
-```
-
-The Stop hook will automatically fire after this, capture the user's first utterance, and inject it back into the conversation. You don't need to do anything else — just respond naturally.
+Just output this greeting as plain text in your response. Do NOT call the audio server directly — the Stop hook will automatically speak it aloud via `/speak` (which includes TTS + barge-in + capture) and inject the user's first utterance back into the conversation. You don't need to do anything else — just respond naturally.
 
 ### 7. Conversational Mode
 

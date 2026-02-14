@@ -6,7 +6,7 @@
 #
 # Uses server-side buffering: after getting speech, tells the audio server
 # to start listening immediately (/queue-listen) so the mic is hot while
-# Claude thinks. Next /speak-and-listen checks the buffer first.
+# Claude thinks. Next /speak checks the buffer first.
 
 INPUT=$(cat)
 
@@ -18,7 +18,7 @@ fi
 
 # Extract last assistant text from transcript JSONL
 TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path')
-LAST_MSG=$(tac "$TRANSCRIPT" | while IFS= read -r line; do
+LAST_MSG=$(tail -r "$TRANSCRIPT" | while IFS= read -r line; do
   ROLE=$(echo "$line" | jq -r '.message.role // empty' 2>/dev/null)
   if [[ "$ROLE" == "assistant" ]]; then
     echo "$line" | jq -r '[.message.content[] | select(.type=="text") | .text] | join(" ")' 2>/dev/null
@@ -30,9 +30,8 @@ if [[ -z "$LAST_MSG" ]]; then
   exit 0
 fi
 
-# Speak my response and capture next utterance
-# (speak-and-listen checks for buffered audio from a previous /queue-listen)
-RESULT=$(curl -s -X POST http://localhost:8150/speak-and-listen \
+# Speak my response and capture next utterance (with barge-in if available)
+RESULT=$(curl -s -X POST http://localhost:8150/speak \
   -H 'Content-Type: application/json' \
   -d "$(jq -n --arg text "$LAST_MSG" '{text: $text}')" \
   --max-time 3600)

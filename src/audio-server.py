@@ -5,15 +5,15 @@ Audio Server for Claude Talk
 Replaces shell scripts + agent with a dedicated HTTP server that handles:
 - TTS playback (macOS `say`)
 - Speech capture via WhisperLiveKit
-- Barge-in detection (Geigel DTD with BlackHole)
+- Barge-in detection (Speex AEC + BlackHole)
 - State management
 - WLK subprocess lifecycle
 
 API:
+  POST /speak               - TTS + capture in one call (with barge-in)
   GET  /listen              - Block until user speaks, return transcription
-  POST /speak-and-listen    - TTS + capture in one call
-  POST /speak               - TTS only (no capture)
   GET  /status              - Current state (idle/listening/speaking)
+  GET  /devices             - List audio devices and active input
   POST /mute                - Mute mic
   POST /unmute              - Unmute mic
   POST /stop                - Graceful shutdown
@@ -38,6 +38,74 @@ import uvicorn
 import websockets
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+
+# ============================================================================
+# Speex Acoustic Echo Cancellation
+# ============================================================================
+
+
+class SpeexAEC:
+    """Wrapper around libspeexdsp for acoustic echo cancellation."""
+
+    def __init__(self, frame_size: int = 256, filter_length: int = 2048, sample_rate: int = 16000):
+        import ctypes
+        # Find libspeexdsp
+        lib_paths = [
+            Path.home() / ".claude-talk" / "lib" / "libspeexdsp.dylib",
+            Path("/opt/homebrew/lib/libspeexdsp.dylib"),
+            Path("/usr/local/lib/libspeexdsp.dylib"),
+        ]
+        self._lib = None
+        for p in lib_paths:
+            if p.exists():
+                self._lib = ctypes.CDLL(str(p))
+                break
+        if self._lib is None:
+            raise RuntimeError("libspeexdsp not found. Install with: brew install speexdsp")
+
+        self._ctypes = ctypes
+        self._frame_size = frame_size
+
+        # Bind functions
+        self._lib.speex_echo_state_init.restype = ctypes.c_void_p
+        self._lib.speex_echo_state_init.argtypes = [ctypes.c_int, ctypes.c_int]
+        self._lib.speex_echo_cancellation.restype = None
+        self._lib.speex_echo_cancellation.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_int16),
+            ctypes.POINTER(ctypes.c_int16),
+            ctypes.POINTER(ctypes.c_int16),
+        ]
+        self._lib.speex_echo_ctl.restype = ctypes.c_int
+        self._lib.speex_echo_ctl.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+        self._lib.speex_echo_state_destroy.restype = None
+        self._lib.speex_echo_state_destroy.argtypes = [ctypes.c_void_p]
+
+        self._state = self._lib.speex_echo_state_init(frame_size, filter_length)
+        rate = ctypes.c_int(sample_rate)
+        SPEEX_ECHO_SET_SAMPLING_RATE = 24
+        self._lib.speex_echo_ctl(self._state, SPEEX_ECHO_SET_SAMPLING_RATE, ctypes.byref(rate))
+
+    def cancel(self, mic: np.ndarray, ref: np.ndarray) -> np.ndarray:
+        """Process one frame: subtract echo of ref from mic, return cleaned audio."""
+        ct = self._ctypes
+        out = np.zeros(self._frame_size, dtype=np.int16)
+        self._lib.speex_echo_cancellation(
+            self._state,
+            mic.ctypes.data_as(ct.POINTER(ct.c_int16)),
+            ref.ctypes.data_as(ct.POINTER(ct.c_int16)),
+            out.ctypes.data_as(ct.POINTER(ct.c_int16)),
+        )
+        return out
+
+    def destroy(self):
+        if self._state:
+            self._lib.speex_echo_state_destroy(self._state)
+            self._state = None
+
+    def __del__(self):
+        self.destroy()
 
 
 # ============================================================================
@@ -275,6 +343,16 @@ def detect_blackhole_device() -> int | None:
     return None
 
 
+def auto_detect_input_device() -> int:
+    """Use the macOS system default input device (set in System Settings > Sound)."""
+    default_input = sd.default.device[0]
+    if default_input is not None and default_input >= 0:
+        dev = sd.query_devices(int(default_input))
+        print(f"  System default input: [{int(default_input)}] {dev['name']}")
+        return int(default_input)
+    raise RuntimeError("No default input audio device configured in System Settings")
+
+
 class AudioEngine:
     """Handles mic capture, TTS, barge-in, and WLK transcription"""
 
@@ -283,8 +361,14 @@ class AudioEngine:
         self.state = state
         self.logger = event_logger
 
-        # Audio settings
-        self.device_index = config.get_int("AUDIO_DEVICE", 1)
+        # Audio settings — auto-detect unless explicitly configured
+        device_cfg = config.get("AUDIO_DEVICE", "auto")
+        self._auto_device = device_cfg.lower() == "auto" or device_cfg == ""
+        if self._auto_device:
+            self.device_index = auto_detect_input_device()
+        else:
+            self.device_index = int(device_cfg)
+            print(f"  Using configured mic device: [{self.device_index}] {sd.query_devices(self.device_index)['name']}")
         self.sample_rate = 16000
         self.gain = config.get_float("MIC_GAIN", 8.0)
         self.silence_timeout = config.get_float("SILENCE_SECS", 2.0)
@@ -453,11 +537,11 @@ class AudioEngine:
             # Capture with barge-in
             self.state.set(STATUS="speaking+listening")
             try:
-                return await self._capture_utterance(tts_pid=tts_pid)
+                return await self._capture_utterance(tts_pid=tts_pid, tts_text=text)
             finally:
                 self.state.set(STATUS="idle")
 
-    async def _capture_utterance(self, tts_pid: int = 0) -> str:
+    async def _capture_utterance(self, tts_pid: int = 0, tts_text: str = "") -> str:
         """
         Core capture logic: streams mic to WLK, handles barge-in, returns text.
         """
@@ -479,6 +563,14 @@ class AudioEngine:
         tts_done_event = asyncio.Event()
         if not tts_active:
             tts_done_event.set()
+
+        # Re-query system default input if in auto mode (user may have switched)
+        if self._auto_device:
+            new_default = sd.default.device[0]
+            if new_default is not None and int(new_default) != self.device_index:
+                dev = sd.query_devices(int(new_default))
+                print(f"  Input device changed: [{int(new_default)}] {dev['name']}")
+                self.device_index = int(new_default)
 
         # Barge-in state
         barge_in_enabled = tts_active and self.barge_in_enabled and self.blackhole_device is not None
@@ -532,56 +624,72 @@ class AudioEngine:
                 await asyncio.sleep(0.05)
 
         async def barge_in_monitor():
-            """Geigel double-talk detection"""
+            """Adaptive barge-in: calibrates mic baseline during TTS, detects speech above it.
+            Buffers all mic frames and replays them to WLK after barge-in so no speech is lost."""
             nonlocal barge_in_triggered
             if not barge_in_enabled:
                 return
 
-            await asyncio.sleep(0.8)  # Grace period
+            await asyncio.sleep(0.5)
             if tts_done_event.is_set():
                 return
 
+            # Unified calibration + detection loop
+            CALIBRATION_FRAMES = 8  # ~0.8s at 100ms/frame
+            baseline_rms: list[float] = []
+            buffered_mic_frames: list[np.ndarray] = []
             spike_count = 0
+            frame_count = 0
+            threshold = 0.0
+
             while not done_event.is_set() and not tts_done_event.is_set():
                 mic_frame = None
                 while not audio_queue.empty():
                     mic_frame = audio_queue.get_nowait()
-
-                ref_frame = None
+                # Drain ref queue (not needed for detection, just keeping it clear)
                 while not ref_queue.empty():
-                    ref_frame = ref_queue.get_nowait()
+                    ref_queue.get_nowait()
 
-                if mic_frame is None or ref_frame is None:
+                if mic_frame is None:
                     await asyncio.sleep(0.05)
                     continue
 
+                buffered_mic_frames.append(mic_frame)
                 mic_rms = float(np.sqrt(np.mean(mic_frame.astype(np.float64) ** 2)))
-                ref_rms = float(np.sqrt(np.mean(ref_frame.astype(np.float64) ** 2)))
-                ratio = mic_rms / max(ref_rms, 1)
+                frame_count += 1
 
-                if ref_rms > 50 and ratio > self.barge_in_ratio:
+                # Calibration: measure mic RMS during TTS (speaker bleed baseline)
+                if frame_count <= CALIBRATION_FRAMES:
+                    baseline_rms.append(mic_rms)
+                    if frame_count == CALIBRATION_FRAMES:
+                        baseline = sum(baseline_rms) / len(baseline_rms)
+                        # Threshold: 2x baseline (speech on top of TTS bleed), min 800
+                        threshold = max(baseline * 2.0, 800)
+                        print(f"[BARGE-IN] calibrated: baseline={baseline:.0f} threshold={threshold:.0f}", file=sys.stderr, flush=True)
+                    await asyncio.sleep(0.05)
+                    continue
+
+                # Detection
+                if mic_rms > threshold:
                     spike_count += 1
-                elif ref_rms <= 50 and mic_rms > 500:
-                    spike_count += 1
+                    print(f"[BARGE-IN] spike! mic_rms={mic_rms:.0f} threshold={threshold:.0f} spikes={spike_count}", file=sys.stderr, flush=True)
                 else:
                     spike_count = max(0, spike_count - 1)
 
                 if spike_count >= 3:
-                    self.logger.log_event("BARGE_IN_DETECTED", {
-                        "mic_rms": mic_rms,
-                        "ref_rms": ref_rms,
-                        "ratio": ratio,
-                    })
-                    print(f"BARGE-IN! mic={mic_rms:.0f} ref={ref_rms:.0f} ratio={ratio:.2f}", file=sys.stderr)
+                    self.logger.log_event("BARGE_IN_DETECTED", {"mic_rms": mic_rms})
+                    print(f"BARGE-IN! mic_rms={mic_rms:.0f} (buffered {len(buffered_mic_frames)} frames for replay)", file=sys.stderr)
                     barge_in_triggered = True
                     try:
                         os.kill(tts_pid, signal.SIGTERM)
                     except ProcessLookupError:
                         pass
                     tts_done_event.set()
-                    # Drain stale frames
-                    while not audio_queue.empty():
-                        audio_queue.get_nowait()
+                    # Only replay frames from the trigger point onward
+                    # Earlier frames are contaminated with TTS bleed
+                    replay_start = max(0, len(buffered_mic_frames) - 3)
+                    for frame in buffered_mic_frames[replay_start:]:
+                        audio_queue.put_nowait(frame)
                     while not ref_queue.empty():
                         ref_queue.get_nowait()
                     return
@@ -594,8 +702,12 @@ class AudioEngine:
             self.logger.log_event("CAPTURE_START")
             print(f"[DEBUG] TTS done, starting audio send", file=sys.stderr, flush=True)
             if tts_active and not barge_in_triggered:
-                await asyncio.sleep(0.5)  # Buffer drain delay
-            if barge_in_enabled and not barge_in_triggered:
+                # Wait for TTS echo/reverb to fully decay, then flush contaminated frames
+                await asyncio.sleep(1.5)
+                while not audio_queue.empty():
+                    audio_queue.get_nowait()
+                # Second flush after a short gap to catch stragglers
+                await asyncio.sleep(0.3)
                 while not audio_queue.empty():
                     audio_queue.get_nowait()
             if not barge_in_enabled:
@@ -664,6 +776,8 @@ class AudioEngine:
             """Check for end-of-utterance"""
             await tts_done_event.wait()
             capture_start = time.monotonic()
+            # After barge-in, user is mid-thought — give them more silence leeway
+            effective_timeout = self.silence_timeout * 2 if barge_in_triggered else self.silence_timeout
 
             while not done_event.is_set():
                 await asyncio.sleep(0.3)
@@ -675,7 +789,7 @@ class AudioEngine:
 
                 if got_text and last_text_change > 0:
                     idle_time = now - last_text_change
-                    if idle_time >= self.silence_timeout and len(text_result) >= 2:
+                    if idle_time >= effective_timeout and len(text_result) >= 2:
                         self.logger.log_event("CAPTURE_END", {
                             "text": text_result,
                             "silence_duration": idle_time,
@@ -712,7 +826,50 @@ class AudioEngine:
                 mic_stream.stop()
                 mic_stream.close()
 
+        # Echo filter: strip TTS bleed from transcription
+        if tts_text and text_result:
+            text_result = self._strip_tts_echo(text_result, tts_text)
+
         return text_result
+
+    @staticmethod
+    def _strip_tts_echo(transcription: str, tts_text: str) -> str:
+        """Remove fragments of TTS text that bled into the transcription.
+        Handles partial matches — echo may start mid-sentence of TTS text."""
+        tts_words = tts_text.lower().split()
+        trans_words = transcription.lower().split()
+
+        if len(trans_words) < 3 or len(tts_words) < 3:
+            return transcription
+
+        # Find the longest run of consecutive TTS words at the start of transcription
+        # The echo might start from any word in the TTS text (mic may miss first words)
+        best_match_len = 0  # number of transcription words matched
+
+        for tts_start in range(len(tts_words)):
+            match_len = 0
+            for j in range(min(len(trans_words) - match_len, len(tts_words) - tts_start)):
+                tw = trans_words[match_len].rstrip(".,!?;:-—'\"")
+                sw = tts_words[tts_start + j].rstrip(".,!?;:-—'\"")
+                if tw == sw:
+                    match_len += 1
+                else:
+                    break
+            if match_len > best_match_len:
+                best_match_len = match_len
+
+        if best_match_len >= 3:
+            # Strip matched echo words, keep the rest
+            remaining_words = transcription.split()[best_match_len:]
+            remaining = " ".join(remaining_words).strip(" .,!?-—")
+            if remaining:
+                print(f"[ECHO-FILTER] stripped {best_match_len} TTS echo words, kept: '{remaining}'", file=sys.stderr, flush=True)
+                return remaining
+            else:
+                print(f"[ECHO-FILTER] entire transcription was TTS echo", file=sys.stderr, flush=True)
+                return "(silence)"
+
+        return transcription
 
 
 # ============================================================================
@@ -727,6 +884,13 @@ class SpeakRequest(BaseModel):
 class StatusResponse(BaseModel):
     state: str
     muted: bool
+    input_device: str = ""
+    input_device_index: int = -1
+    output_device: str = ""
+    output_device_index: int = -1
+    barge_in: bool = False
+    blackhole_device: int | None = None
+    auto_device: bool = False
 
 
 class TextResponse(BaseModel):
@@ -770,9 +934,21 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/status")
 async def get_status() -> StatusResponse:
-    """Get current server state"""
+    """Get current server state with device and barge-in info"""
+    import sounddevice as sd
+    input_dev = sd.query_devices(audio_engine.device_index)
+    default_out = sd.default.device[1]
+    output_dev = sd.query_devices(int(default_out)) if default_out is not None else {}
     return StatusResponse(
-        state=state.get("STATUS", "idle"), muted=state.get("MUTED", "false") == "true"
+        state=state.get("STATUS", "idle"),
+        muted=state.get("MUTED", "false") == "true",
+        input_device=input_dev.get("name", "unknown"),
+        input_device_index=audio_engine.device_index,
+        output_device=output_dev.get("name", "unknown"),
+        output_device_index=int(default_out) if default_out is not None else -1,
+        barge_in=audio_engine.barge_in_enabled,
+        blackhole_device=audio_engine.blackhole_device,
+        auto_device=audio_engine._auto_device,
     )
 
 
@@ -787,37 +963,41 @@ async def listen() -> TextResponse:
 
 @app.post("/queue-listen")
 async def queue_listen() -> dict[str, str]:
-    """Start listening in background. Result buffered for next /speak-and-listen."""
+    """Start listening in background. Result buffered for next /speak."""
     event_logger.log_event("API_QUEUE_LISTEN")
     await audio_engine.queue_listen()
     return {"status": "ok"}
 
 
 @app.post("/speak")
-async def speak(req: SpeakRequest) -> dict[str, str]:
-    """Speak text via TTS (no capture)"""
+async def speak(req: SpeakRequest) -> TextResponse:
+    """Speak text via TTS, then capture user's response (with barge-in if available)"""
     event_logger.log_event("API_SPEAK_START", {"text": req.text})
-    pid = await audio_engine.speak(req.text)
-    if pid:
-        # Wait for TTS to finish
-        while True:
-            try:
-                os.kill(pid, 0)
-                await asyncio.sleep(0.1)
-            except ProcessLookupError:
-                break
-        state.set(STATUS="idle")
-    event_logger.log_event("API_SPEAK_END")
-    return {"status": "ok"}
-
-
-@app.post("/speak-and-listen")
-async def speak_and_listen(req: SpeakRequest) -> TextResponse:
-    """Speak text, then capture utterance (with barge-in)"""
-    event_logger.log_event("API_SPEAK_AND_LISTEN_START", {"text": req.text})
     text = await audio_engine.speak_and_listen(req.text)
-    event_logger.log_event("API_SPEAK_AND_LISTEN_END", {"text": text})
+    event_logger.log_event("API_SPEAK_END", {"text": text})
     return TextResponse(text=text)
+
+
+@app.get("/devices")
+async def get_devices() -> dict:
+    """List audio devices with active input/output info"""
+    devices = sd.query_devices()
+    device_list = []
+    for i, dev in enumerate(devices):
+        device_list.append({
+            "index": i,
+            "name": dev["name"],
+            "input_channels": dev["max_input_channels"],
+            "output_channels": dev["max_output_channels"],
+        })
+    default_in, default_out = sd.default.device
+    return {
+        "devices": device_list,
+        "active_input": audio_engine.device_index,
+        "active_input_name": devices[audio_engine.device_index]["name"],
+        "default_input": int(default_in) if default_in is not None else None,
+        "default_output": int(default_out) if default_out is not None else None,
+    }
 
 
 @app.post("/mute")
