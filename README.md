@@ -100,6 +100,24 @@ You can save and switch between multiple personalities:
 
 Personalities are stored in `~/.claude-talk/personalities/`. Each includes voice, name, style, verbosity, and custom instructions. Switching automatically updates the active voice.
 
+### Default Personalities
+
+Installation includes 9 pre-made personalities you can try immediately:
+
+| Personality | Character | Voice | Style |
+|-------------|-----------|-------|-------|
+| **bonnie** | Scottish pirate harbour girl, whale hunter's daughter | Fiona (Enhanced) | Witty & playful |
+| **claude** | British gentleman with Bond-like wit and radical candor | Daniel (Enhanced) | Witty & playful |
+| **crystal** | New Age wellness influencer with mystical energy | Zoe (Premium) | Calm & thoughtful |
+| **hank** | American trucker/mechanic with blue-collar wisdom | Evan (Enhanced) | Witty & playful |
+| **maeve** | Irish mystical pub storyteller who believes in folklore | Moira (Enhanced) | Calm & thoughtful |
+| **sheila** | Australian outback adventurer with Steve Irwin energy | Karen (Premium) | Witty & playful |
+| **tash** | Bondi beach surfer girl with laid-back vibes | Karen (Premium) | Casual & warm |
+| **vex** | Stranded alien AI calculating path home | Zarvox | Calm & thoughtful |
+| **vikram** | Former soldier turned corporate professional | Rishi (Enhanced) | Professional & concise |
+
+Switch with `/claude-talk:personality switch <name>`. Create your own with `/claude-talk:personality create`.
+
 ## Commands
 
 | Command | Description |

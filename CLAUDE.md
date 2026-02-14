@@ -25,6 +25,7 @@ All processing is local except the Claude API call.
 - `config/defaults.env` - Default configuration
 - `~/.claude-talk/config.env` - User overrides (created by install)
 - `~/.claude-talk/personality.md` - Active personality (created by install)
-- `~/.claude-talk/personalities/` - Saved personalities directory
+- `~/.claude-talk/personalities/` - Saved personalities directory (includes 9 defaults)
 - `~/.claude-talk/active-personality` - Name of active personality
 - `~/.claude-talk/venvs/` - Python virtual environments
+- `personalities/` - Default personality templates (copied during install)

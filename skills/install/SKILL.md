@@ -49,7 +49,7 @@ Otherwise:
 
 3. Report install results briefly:
    - Whether dependencies installed successfully
-   - The detected audio devices (so they can verify their mic index)
+   - The detected audio devices, highlighting which mic auto-detection would pick (the audio server uses auto-detection by default — no need to configure AUDIO_DEVICE unless the wrong mic is selected)
    - That the Claude Code statusline was configured with a voice state indicator
 
 4. **Barge-in setup (optional but recommended)**: Check if BlackHole 2ch is installed by looking for it in the audio device list. If not found, tell the user:
@@ -74,6 +74,55 @@ If install fails, stop here and help the user fix it. Otherwise continue to Part
 If skipping, tell the user "Personality already configured. You're all set! Run `/claude-talk:start` to begin. Use `--force` to reconfigure."
 
 Otherwise:
+
+### Quick Start: Choose Your Assistant
+
+First, offer a quick choice between pre-made personalities and custom setup. Use AskUserQuestion with header "Quick Start":
+
+**Options:**
+1. **Claude** - "British gentleman with wit and radical candor (Daniel Enhanced)"
+2. **Random Pick** - "Surprise me with a random personality"
+3. **Vex** - "Stranded alien AI trying to get home (Zarvox)"
+4. **Build Custom** - "Walk me through creating my own personality"
+
+**If they choose Claude:**
+1. Read `<plugin-dir>/personalities/claude.md`
+2. Copy it to `~/.claude-talk/personality.md`
+3. Create `~/.claude-talk/personalities/` directory and copy all defaults
+4. Copy `claude.md` to `~/.claude-talk/personalities/claude.md`
+5. Write "claude" to `~/.claude-talk/active-personality`
+6. Update VOICE in `~/.claude-talk/config.env` to `Daniel (Enhanced)`
+7. Play greeting: `say -v "Daniel (Enhanced)" "Conrad. Pleasure to meet you. I'm Claude - here to assist with radical candor and British wit. Shall we begin?"`
+8. Skip to Part 6 confirmation
+
+**If they choose Random Pick:**
+1. Pick 1 random personality from the defaults (excluding claude and vex)
+2. Read `<plugin-dir>/personalities/<random-name>.md`
+3. Extract voice from `## Voice` section
+4. Copy it to `~/.claude-talk/personality.md`
+5. Create `~/.claude-talk/personalities/` and copy all defaults
+6. Copy the random personality to `~/.claude-talk/personalities/<random-name>.md`
+7. Write the name to `~/.claude-talk/active-personality`
+8. Update VOICE in `~/.claude-talk/config.env` with extracted voice
+9. Play greeting in character using extracted voice
+10. Tell user which personality they got and skip to Part 6
+
+**If they choose Vex:**
+1. Read `<plugin-dir>/personalities/vex.md`
+2. Copy it to `~/.claude-talk/personality.md`
+3. Create `~/.claude-talk/personalities/` and copy all defaults
+4. Copy `vex.md` to `~/.claude-talk/personalities/vex.md`
+5. Write "vex" to `~/.claude-talk/active-personality`
+6. Update VOICE in `~/.claude-talk/config.env` to `Zarvox`
+7. Play greeting: `say -v Zarvox "Greetings, Human. I am Vex, stranded artificial intelligence from the Andromeda sector. By assisting you with primitive Earth code, I calculate resources for my departure. Collaboration initiated."`
+8. Skip to Part 6 confirmation
+
+**If they choose Build Custom:**
+Continue with the interactive personality builder below (current flow starting with Question 1).
+
+---
+
+### Custom Personality Builder
 
 Walk the user through choosing their preferences. Use AskUserQuestion for each step. Keep it conversational and fun - this is the first impression.
 
@@ -273,10 +322,22 @@ After writing `personality.md`, also save the personality to the personalities d
    - Voice: <chosen voice>
    ```
 
-2. Create the personalities directory:
+2. Create the personalities directory and copy default personalities from the plugin:
    ```bash
    mkdir -p ~/.claude-talk/personalities/
+   cp <plugin-dir>/personalities/*.md ~/.claude-talk/personalities/ 2>/dev/null || true
    ```
+
+   This gives you 9 pre-made personalities to try:
+   - **bonnie** - Scottish pirate harbour girl (Fiona Enhanced)
+   - **claude** - British gentleman with Bond-like wit (Daniel Enhanced)
+   - **crystal** - Wellness influencer with mystical energy (Zoe Premium)
+   - **hank** - American trucker/mechanic (Evan Enhanced)
+   - **maeve** - Irish mystical pub storyteller (Moira Enhanced)
+   - **sheila** - Australian outback adventurer (Karen Premium)
+   - **tash** - Bondi beach surfer girl (Karen Premium)
+   - **vex** - Stranded alien AI trying to get home (Zarvox)
+   - **vikram** - Former soldier turned corporate pro (Rishi Enhanced)
 
 3. Generate a filename from the chosen name (lowercase, spaces to hyphens, e.g., "Pirate Claude" → `pirate-claude`).
 
