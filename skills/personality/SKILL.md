@@ -49,8 +49,9 @@ If no personalities exist, say: "No personalities found. Run `/claude-talk:perso
 5. Write the name to `~/.claude-talk/active-personality`.
 6. Update the `VOICE=` line in `~/.claude-talk/config.env` with the extracted voice. Quote voices with spaces (e.g., `VOICE="Daniel (Enhanced)"`).
 7. Confirm: "Switched to **<name>**. Voice set to <voice>."
-8. If a voice session is active (check `~/.claude-talk/state` for `SESSION=active`), speak in the new voice:
+8. If a voice session is active (check `~/.claude-talk/state` for `SESSION=active`), update the voice on the running audio server and speak:
    ```bash
+   curl -s -X POST http://localhost:8150/voice -H 'Content-Type: application/json' -d '{"voice":"<voice>"}'
    curl -s -X POST http://localhost:8150/speak -H 'Content-Type: application/json' -d '{"text":"Switching to <name>. How do I sound?"}'
    ```
 

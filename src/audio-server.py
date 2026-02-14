@@ -891,6 +891,7 @@ class StatusResponse(BaseModel):
     barge_in: bool = False
     blackhole_device: int | None = None
     auto_device: bool = False
+    voice: str = ""
 
 
 class TextResponse(BaseModel):
@@ -949,6 +950,7 @@ async def get_status() -> StatusResponse:
         barge_in=audio_engine.barge_in_enabled,
         blackhole_device=audio_engine.blackhole_device,
         auto_device=audio_engine._auto_device,
+        voice=audio_engine.voice,
     )
 
 
@@ -1012,6 +1014,16 @@ async def unmute() -> dict[str, str]:
     """Unmute microphone"""
     state.set(MUTED="false")
     return {"status": "unmuted"}
+
+
+@app.post("/voice")
+async def set_voice(req: dict):
+    """Change TTS voice at runtime"""
+    voice = req.get("voice")
+    if not voice:
+        return {"error": "voice is required"}, 400
+    audio_engine.voice = voice
+    return {"voice": audio_engine.voice}
 
 
 @app.post("/stop")
