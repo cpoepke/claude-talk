@@ -86,6 +86,20 @@ The install command includes a personality setup where you choose:
 
 Your personality is saved to `~/.claude-talk/personality.md` and loaded every time you start a voice chat. Re-run `/claude-talk:install` to change it anytime.
 
+### Multiple Personalities
+
+You can save and switch between multiple personalities:
+
+```text
+/claude-talk:personality              # List all personalities
+/claude-talk:personality create       # Create a new one (interactive)
+/claude-talk:personality switch pirate-claude  # Switch active personality
+/claude-talk:personality edit         # Edit the active personality
+/claude-talk:personality delete old   # Delete a saved personality
+```
+
+Personalities are stored in `~/.claude-talk/personalities/`. Each includes voice, name, style, verbosity, and custom instructions. Switching automatically updates the active voice.
+
 ## Commands
 
 | Command | Description |
@@ -95,6 +109,7 @@ Your personality is saved to `~/.claude-talk/personality.md` and loaded every ti
 | `/claude-talk:stop` | Stop voice chat |
 | `/claude-talk:chat` | Quick single voice exchange (no persistent session) |
 | `/claude-talk:config` | View/edit settings |
+| `/claude-talk:personality` | Manage personalities (list, create, switch, edit, delete, export, import) |
 | `/claude-talk:help` | Show help |
 
 ## Requirements
@@ -180,6 +195,7 @@ claude-talk/
 │   ├── stop/SKILL.md             # Stop voice chat
 │   ├── chat/SKILL.md             # Quick single exchange
 │   ├── config/SKILL.md           # View/edit config
+│   ├── personality/SKILL.md       # Personality management
 │   └── help/SKILL.md             # Show help
 ├── src/
 │   └── audio-server.py           # Audio server (TTS, capture, barge-in, WLK)

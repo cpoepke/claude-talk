@@ -15,6 +15,7 @@ All processing is local except the Claude API call.
 - `/claude-talk:stop` - Stop voice chat
 - `/claude-talk:chat` - Quick single voice exchange (no teammate)
 - `/claude-talk:config` - View/edit configuration
+- `/claude-talk:personality` - Manage personalities (list, create, switch, edit, delete, export, import)
 - `/claude-talk:help` - Show help
 
 ## Key paths
@@ -23,5 +24,7 @@ All processing is local except the Claude API call.
 - `.claude/hooks/voice-stop.sh` - Stop hook (voice conversation loop)
 - `config/defaults.env` - Default configuration
 - `~/.claude-talk/config.env` - User overrides (created by install)
-- `~/.claude-talk/personality.md` - Name, voice, and personality (created by install)
+- `~/.claude-talk/personality.md` - Active personality (created by install)
+- `~/.claude-talk/personalities/` - Saved personalities directory
+- `~/.claude-talk/active-personality` - Name of active personality
 - `~/.claude-talk/venvs/` - Python virtual environments

@@ -29,6 +29,7 @@ Display this help text to the user:
 | `/claude-talk:unmute` | Resume microphone capture |
 | `/claude-talk:chat` | Quick single voice exchange |
 | `/claude-talk:config` | View/edit settings (e.g., `/claude-talk:config VOICE=Karen`) |
+| `/claude-talk:personality` | Manage personalities (list, create, switch, edit, delete) |
 | `/claude-talk:help` | Show this help |
 
 ### Requirements
@@ -43,8 +44,17 @@ Settings are in `~/.claude-talk/config.env`. Key settings:
 - `VOICE` - TTS voice (Daniel, Karen, Moira, Samantha)
 - `CAPTURE_MODE` - `wlk` (streaming, default) or `vad` (legacy batch)
 
-### Personality
-Your assistant personality is in `~/.claude-talk/personality.md`. Re-run `/claude-talk:install` to change it.
+### Personalities
+Manage multiple personalities with `/claude-talk:personality`:
+- `/claude-talk:personality` — list all saved personalities
+- `/claude-talk:personality create` — create a new personality
+- `/claude-talk:personality switch <name>` — switch active personality
+- `/claude-talk:personality edit [name]` — edit a personality
+- `/claude-talk:personality delete <name>` — delete a personality
+- `/claude-talk:personality export [name]` — print personality file
+- `/claude-talk:personality import` — import from markdown or file
+
+Personalities are saved in `~/.claude-talk/personalities/`. The active one is copied to `~/.claude-talk/personality.md`.
 
 ### Barge-In (interrupt TTS by speaking)
 Requires BlackHole 2ch virtual audio device:

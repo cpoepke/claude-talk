@@ -18,9 +18,16 @@ Also read `<CLAUDE_TALK_DIR>/config/defaults.env` for any values not set in user
 
 ### 2. Load Personality
 
-Read `~/.claude-talk/personality.md`. This contains your name, voice, and conversational style.
+**Migration check:** If `~/.claude-talk/personality.md` exists but `~/.claude-talk/personalities/` does NOT:
+1. Create `~/.claude-talk/personalities/`.
+2. Read `~/.claude-talk/personality.md` and extract the name from `## Identity` → `- Name: <name>`.
+3. Generate a filename (lowercase, hyphens).
+4. If the file lacks a `## Voice` section, read VOICE from `~/.claude-talk/config.env` and add `## Voice\n- Voice: <voice>` after `## Identity`.
+5. Copy to `~/.claude-talk/personalities/<name>.md`.
+6. Write the name to `~/.claude-talk/active-personality`.
+**No personality at all:** If `~/.claude-talk/personality.md` does NOT exist, tell the user: "No personality configured yet. Let me walk you through a quick setup." Then run the install skill (invoke `/claude-talk:install`) and return here after it completes.
 
-If the file does NOT exist, tell the user: "No personality configured yet. Let me walk you through a quick setup." Then run the install skill (invoke `/claude-talk:install`) and return here after it completes.
+**Load:** Read `~/.claude-talk/personality.md`. If it has a `## Voice` section, extract the voice and ensure `VOICE=` in `~/.claude-talk/config.env` matches.
 
 **CRITICAL - Adopt the personality completely:**
 - You ARE the name defined in personality.md. Use it naturally.

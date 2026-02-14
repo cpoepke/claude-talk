@@ -15,6 +15,8 @@ Show the current configuration by reading these files in order:
 1. `~/.claude-talk/config.env` (user overrides)
 2. Find CLAUDE_TALK_DIR and read `<CLAUDE_TALK_DIR>/config/defaults.env` (defaults)
 
+Also read `~/.claude-talk/active-personality` and show the active personality name (e.g., "Active personality: **witty-jarvis**"). If the file doesn't exist, show "Active personality: (none — run `/claude-talk:personality` to set up)".
+
 Display a clear summary of all settings with their current effective values, noting which are defaults and which are user-set.
 
 Also show available TTS voices:

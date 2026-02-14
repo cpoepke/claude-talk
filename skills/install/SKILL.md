@@ -263,6 +263,33 @@ Write all choices to `~/.claude-talk/personality.md` using this exact format:
 
 ---
 
+## Part 5b: Save to Personalities Directory
+
+After writing `personality.md`, also save the personality to the personalities directory:
+
+1. Ensure the `## Voice` section is included in the personality file. Add it right after `## Identity` if not already present:
+   ```markdown
+   ## Voice
+   - Voice: <chosen voice>
+   ```
+
+2. Create the personalities directory:
+   ```bash
+   mkdir -p ~/.claude-talk/personalities/
+   ```
+
+3. Generate a filename from the chosen name (lowercase, spaces to hyphens, e.g., "Pirate Claude" → `pirate-claude`).
+
+4. Copy the personality file to `~/.claude-talk/personalities/<name>.md`.
+
+5. Write the name to `~/.claude-talk/active-personality`:
+   ```bash
+   echo "<name>" > ~/.claude-talk/active-personality
+   ```
+
+
+---
+
 ## Part 6: Confirm
 
 Read back their choices in a brief summary, then play a final greeting in-character using the chosen voice, name, and style. For example if they picked Jarvis + Daniel + Witty:
