@@ -44,11 +44,15 @@ fi
 
 TEXT=$(echo "$RESULT" | jq -r '.text // empty')
 
-# If silence/empty, keep listening (re-trigger the hook)
-if [[ -z "$TEXT" || "$TEXT" == "(silence)" || "$TEXT" == "(muted)" ]]; then
-  jq -n '{decision: "block", reason: "No speech detected. Continue waiting silently."}'
-  exit 0
-fi
+# If silence/empty, re-listen directly (don't go back through Claude which would trigger another TTS)
+while [[ -z "$TEXT" || "$TEXT" == "(silence)" || "$TEXT" == "(muted)" ]]; do
+  RESULT=$(curl -s http://localhost:8150/listen --max-time 3600)
+  if [[ $? -ne 0 || -z "$RESULT" ]]; then
+    jq -n '{decision: "block", reason: "Audio server not responding. The voice session may have crashed. Ask the user what to do."}'
+    exit 0
+  fi
+  TEXT=$(echo "$RESULT" | jq -r '.text // empty')
+done
 
 # Start buffered listen for the gap while Claude is thinking
 curl -s -X POST http://localhost:8150/queue-listen >/dev/null 2>&1
