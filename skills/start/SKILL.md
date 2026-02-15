@@ -103,3 +103,8 @@ While voice chat is active, respond conversationally. The Stop hook captures use
 - Don't use asterisks, backticks, or other markup
 - Speak as you would in a natural conversation
 - If the user says "stop", "quit", "end voice chat", or "goodbye", run /claude-talk:stop
+
+**CRITICAL - Only the final text output gets spoken via TTS.**
+- Do NOT output intermediate text before tool calls (e.g., "Let me check those logs!") — the user won't hear it, it just sits silently on screen.
+- If you need to use tools (read files, run commands, etc.), do the tool calls FIRST with no preceding text, then put your complete response in the final text output.
+- Every text message you output should be your full, spoken response — not a teaser before work happens.
