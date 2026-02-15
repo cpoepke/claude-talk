@@ -1243,22 +1243,30 @@ async def speak(req: SpeakRequest) -> TextResponse:
 
 
 @app.post("/queue-speak")
-async def queue_speak(req: QueueSpeakRequest) -> dict[str, str]:
+async def queue_speak(req: QueueSpeakRequest) -> dict:
     """Queue a TTS message with specific voice for sequential playback"""
-    if message_queue is None:
-        raise HTTPException(status_code=503, detail="Message queue not initialized")
+    print(f"[DEBUG] queue_speak called: text={req.text[:20]}, voice={req.voice}, session={req.session_id[:8]}", file=sys.stderr, flush=True)
+    try:
+        print(f"[DEBUG] message_queue is None: {message_queue is None}", file=sys.stderr, flush=True)
+        if message_queue is None:
+            raise HTTPException(status_code=503, detail="Message queue not initialized")
 
-    event_logger.log_event("API_QUEUE_SPEAK", {
-        "session_id": req.session_id,
-        "voice": req.voice,
-        "text": req.text[:50]
-    })
-    await message_queue.put({
-        "text": req.text,
-        "voice": req.voice,
-        "session_id": req.session_id
-    })
-    return {"status": "queued", "queue_size": message_queue.qsize()}
+        event_logger.log_event("API_QUEUE_SPEAK", {
+            "session_id": req.session_id,
+            "voice": req.voice,
+            "text": req.text[:50]
+        })
+        await message_queue.put({
+            "text": req.text,
+            "voice": req.voice,
+            "session_id": req.session_id
+        })
+        return {"status": "queued", "queue_size": message_queue.qsize()}
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR in queue_speak: {e}", file=sys.stderr, flush=True)
+        raise
 
 
 @app.get("/queue-response/{session_id}")
@@ -1402,7 +1410,7 @@ async def _delayed_exit():
 def main():
     port = config.get_int("AUDIO_SERVER_PORT", 8150)
     print(f"Starting audio server on port {port}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
 
 
 if __name__ == "__main__":
