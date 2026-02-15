@@ -191,6 +191,17 @@ This requires **BlackHole 2ch** as a virtual audio loopback. Barge-in is enabled
 
 See the [full barge-in guide](docs/barge-in-setup.md) for how the Geigel detection algorithm works, tuning advice, and troubleshooting.
 
+## Reliability
+
+claude-talk includes resilience mechanisms to handle WhisperLiveKit instability during long conversations:
+
+- **Exception handling** — WebSocket send failures are caught gracefully instead of crashing
+- **Fast failure detection** — Unresponsive WLK is detected in 3 seconds (not 10), minimizing speech loss
+- **Connection retry** — Failed connections retry up to 3 times with exponential backoff
+- **Rate limiting** — Frame bursts are paced to prevent buffer overflow during long TTS responses
+
+These improvements prevent cascade failures when WLK becomes unresponsive, particularly during verbose assistant responses.
+
 ## Architecture
 
 Voice chat uses a **Stop hook** instead of a teammate — zero extra Claude API overhead. The hook fires after each assistant response, speaks it via TTS, captures the user's next utterance, and injects it back into the conversation. Server-side buffering keeps the mic hot during Claude's thinking time.

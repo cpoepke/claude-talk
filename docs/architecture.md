@@ -67,3 +67,37 @@ The audio server sequences TTS and capture: it speaks the response first, waits 
 ## Microphone gain
 
 MacBook Pro built-in microphones produce very weak int16 signals (ambient RMS ~50, speech ~200). An 8x gain multiplier is applied before sending to WhisperLiveKit. External USB mics typically need ~1.0-2.0x. Too much gain (10x+) causes clipping, which Whisper interprets as `[Music]`.
+
+## Resilience & error handling
+
+The audio server implements four layers of fault tolerance to handle WhisperLiveKit instability:
+
+### 1. Exception handling for websocket operations
+
+WebSocket send operations (`ws.send()`) are wrapped in try-catch blocks. When WLK crashes or closes the connection mid-stream (error 1011), the exception is caught and triggers a graceful shutdown instead of propagating unchecked and causing cascade failures.
+
+### 2. Fast failure detection
+
+WLK unresponsiveness timeout reduced from 10 seconds to 3 seconds. When WLK stops responding during capture, the system detects it faster and ends the capture, minimizing speech loss. The shorter timeout also improves user experience by failing fast instead of leaving the user waiting in silence.
+
+### 3. Connection retry with exponential backoff
+
+WebSocket connection attempts retry up to 3 times with exponential backoff:
+- Attempt 1: 5s timeout
+- Attempt 2: 10s timeout, 0.5s delay
+- Attempt 3: 15s timeout, 1s delay
+
+This handles transient network failures and WLK startup delays without requiring manual intervention.
+
+### 4. Frame rate limiting
+
+To prevent overwhelming WLK's processing buffer during long TTS responses, a 10ms pause is injected every 50 frames (~5 seconds of audio). This prevents buffer saturation that triggers connection closure (error 1011).
+
+### Why these improvements matter
+
+Long assistant responses (200+ audio frames) can cause WLK to become unresponsive or close the websocket connection. Without resilience mechanisms, this results in:
+- Unhandled exceptions crashing the audio server
+- 10+ seconds of user speech lost while waiting for timeout
+- Failed transcriptions requiring manual session restart
+
+With these improvements, the system gracefully handles WLK instability, preserves partial transcriptions when possible, and recovers automatically from transient failures.
