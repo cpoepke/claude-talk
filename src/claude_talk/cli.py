@@ -354,8 +354,8 @@ def hook():
     """Hook implementations."""
 
 
-@hook.command("voice-stop")
-def hook_voice_stop():
-    """Voice stop hook: speak response, capture user speech, inject into conversation."""
+@hook.command("stop")
+def hook_stop():
+    """Stop hook: speak response, capture user speech, inject into conversation."""
     from .hooks.voice_stop import run
     run()
