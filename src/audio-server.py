@@ -719,6 +719,13 @@ class AudioEngine:
             nonsplke_run = 0  # consecutive non-spike frames (for slow decay)
             ratio_threshold = self.barge_in_ratio  # from config (default 0.15)
 
+            # Dynamic calibration: measure echo bleed during first N frames
+            calibration_frames = 15  # ~750ms at 50ms/frame
+            calibration_ratios: list[float] = []
+            calibration_mic_rms_values: list[float] = []
+            min_speech_rms = 500  # default until calibrated
+            calibrated = False
+
             while not done_event.is_set() and not tts_done_event.is_set():
                 mic_frame = None
                 while not audio_queue.empty():
@@ -755,9 +762,28 @@ class AudioEngine:
                     await asyncio.sleep(0.05)
                     continue
 
+                # Dynamic calibration phase: collect echo bleed measurements
+                if not calibrated and frame_count <= 5 + calibration_frames:
+                    if ref_rms > 100:  # Only calibrate when TTS is playing
+                        calibration_ratios.append(raw_mic_rms / ref_rms)
+                        calibration_mic_rms_values.append(raw_mic_rms)
+                    if frame_count == 5 + calibration_frames:
+                        calibrated = True
+                        if calibration_ratios:
+                            avg_echo_ratio = sum(calibration_ratios) / len(calibration_ratios)
+                            max_echo_rms = max(calibration_mic_rms_values)
+                            # Set ratio threshold to 2x observed echo ratio (with floor)
+                            ratio_threshold = max(ratio_threshold, avg_echo_ratio * 2.0)
+                            # Set min speech RMS to 2x observed max echo bleed (with floor)
+                            min_speech_rms = max(500, max_echo_rms * 2.0)
+                            print(f"[BARGE-IN] Calibrated: echo_ratio={avg_echo_ratio:.2f} max_echo_rms={max_echo_rms:.0f} → ratio_thr={ratio_threshold:.2f} min_speech={min_speech_rms:.0f}", file=sys.stderr, flush=True)
+                        else:
+                            print(f"[BARGE-IN] Calibration: no ref frames, using defaults ratio_thr={ratio_threshold} min_speech={min_speech_rms}", file=sys.stderr, flush=True)
+                    await asyncio.sleep(0.05)
+                    continue
+
                 # Geigel ratio detection: mic/reference
                 # Require both: ratio exceeds threshold AND mic RMS is loud enough to be speech
-                min_speech_rms = 500  # Real speech is typically 1000+ RMS; echo bleed is 80-500
                 if ref_rms > 100:  # Only detect when TTS is actively playing
                     ratio = raw_mic_rms / ref_rms
                     if frame_count % 10 == 0:
@@ -781,7 +807,7 @@ class AudioEngine:
                         spike_count = max(0, spike_count - 1)
                         nonsplke_run = 0
 
-                if spike_count >= 4:
+                if spike_count >= 3:
                     self.logger.log_event("BARGE_IN_DETECTED", {"mic_rms": raw_mic_rms})
                     print(f"BARGE-IN! mic_rms={raw_mic_rms:.0f} (buffered {len(buffered_mic_frames)} frames for replay)", file=sys.stderr)
                     barge_in_triggered = True
