@@ -132,9 +132,14 @@ Walk the user through choosing their preferences. Use AskUserQuestion for each s
 
 Tell the user: "First, let's find your voice. Listen to these options."
 
-Before playing previews, check which Enhanced/Premium voices are installed (Bash):
+Before playing previews, check which Enhanced/Premium voices are installed (get plugin dir first, then use Bash):
 ```bash
-say -v '?' | grep -E "(Enhanced|Premium)"
+if [ -d scripts/lib ]; then
+  PLUGIN_DIR="$(pwd)"
+else
+  PLUGIN_DIR=$(grep CLAUDE_TALK_DIR ~/.claude-talk/config.env 2>/dev/null | cut -d= -f2 | tr -d '"')
+fi
+bash "$PLUGIN_DIR/scripts/lib/check-enhanced-voices.sh"
 ```
 
 **Recommend Enhanced voices:** If few or no Enhanced voices are installed, tell the user:

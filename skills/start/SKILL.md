@@ -12,9 +12,16 @@ Launch a real-time voice conversation. You will hear Claude speak and can respon
 
 ### 1. Load Configuration
 
-Read `~/.claude-talk/config.env` to get `CLAUDE_TALK_DIR` and other settings.
-If the file doesn't exist, check if the current directory contains `scripts/start-whisper-server.sh` and use that as CLAUDE_TALK_DIR.
-Also read `<CLAUDE_TALK_DIR>/config/defaults.env` for any values not set in user config.
+Get CLAUDE_TALK_DIR (use Bash):
+```bash
+if [ -d scripts/lib ]; then
+  echo "$(pwd)"
+else
+  grep CLAUDE_TALK_DIR ~/.claude-talk/config.env 2>/dev/null | cut -d= -f2 | tr -d '"'
+fi
+```
+
+(Config loading is now handled by the individual scripts.)
 
 ### 2. Load Personality
 
@@ -43,33 +50,18 @@ Keep the full personality.md content in your context for the duration of this vo
 
 The audio server handles all audio operations (TTS, capture, barge-in, WLK).
 
-First, check if WLK venv exists. Read `CLAUDE_TALK_DIR/config/defaults.env` or `~/.claude-talk/config.env` to get WLK_VENV path (default: `$HOME/.claude-talk/venvs/wlk`).
-
-Start the audio server in background (use Bash with run_in_background):
+Start the audio server and wait for readiness (use Bash):
 ```bash
-source "<WLK_VENV>/bin/activate" && python3 "<CLAUDE_TALK_DIR>/src/audio-server.py"
-```
-
-Wait up to 15 seconds for it to be ready by polling the status endpoint:
-```bash
-for i in {1..15}; do
-  if curl -s http://localhost:8150/status >/dev/null 2>&1; then
-    echo "Audio server ready"
-    exit 0
-  fi
-  sleep 1
-done
-echo "Audio server failed to start" >&2
-exit 1
+bash "$CLAUDE_TALK_DIR/scripts/lib/start-audio-server.sh"
 ```
 
 If it fails, tell the user and abort.
 
 ### 5. Activate Voice Session
 
-Set the voice session state so the Stop hook knows to activate:
+Set the voice session state so the Stop hook knows to activate (use Bash):
 ```bash
-echo "SESSION=active" > "$HOME/.claude-talk/state"
+bash "$CLAUDE_TALK_DIR/scripts/lib/set-session-state.sh" active
 ```
 
 ### 6. Greet the User

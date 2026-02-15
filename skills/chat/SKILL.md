@@ -14,9 +14,14 @@ The audio server must be running. If not, start it first by following the audio 
 
 ## Steps
 
-1. Check if audio server is running:
+1. Get CLAUDE_TALK_DIR and check if audio server is running (use Bash):
    ```bash
-   curl -s http://localhost:8150/status >/dev/null 2>&1
+   if [ -d scripts/lib ]; then
+     CLAUDE_TALK_DIR="$(pwd)"
+   else
+     CLAUDE_TALK_DIR=$(grep CLAUDE_TALK_DIR ~/.claude-talk/config.env 2>/dev/null | cut -d= -f2 | tr -d '"')
+   fi
+   bash "$CLAUDE_TALK_DIR/scripts/lib/check-audio-server.sh"
    ```
    If it fails, tell the user the audio server isn't running and they should start a voice chat session first with `/claude-talk:start`, or you can start the server for them.
 

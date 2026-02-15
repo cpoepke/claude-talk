@@ -28,22 +28,14 @@ If it returns JSON, display:
 - **Output device**: name and index
 - **Barge-in**: enabled/disabled, BlackHole device index if available
 
-Also show audio devices and active input/output. Run:
+Also show audio devices and active input/output. Get CLAUDE_TALK_DIR first, then run:
 ```bash
-source "$HOME/.claude-talk/venvs/wlk/bin/activate" && python3 -c "
-import sounddevice as sd
-devices = sd.query_devices()
-din, dout = sd.default.device
-print('Audio Devices:')
-for i, d in enumerate(devices):
-    flags = []
-    if d['max_input_channels'] > 0: flags.append(f\"{d['max_input_channels']}in\")
-    if d['max_output_channels'] > 0: flags.append(f\"{d['max_output_channels']}out\")
-    marker = ''
-    if i == din: marker += ' ← default input'
-    if i == dout: marker += ' ← default output'
-    print(f'  [{i}] {d[\"name\"]} ({', '.join(flags)}){marker}')
-"
+if [ -d scripts/lib ]; then
+  CLAUDE_TALK_DIR="$(pwd)"
+else
+  CLAUDE_TALK_DIR=$(grep CLAUDE_TALK_DIR ~/.claude-talk/config.env 2>/dev/null | cut -d= -f2 | tr -d '"')
+fi
+bash "$CLAUDE_TALK_DIR/scripts/lib/get-audio-devices.sh"
 ```
 
 Show the active AUDIO_DEVICE setting and what it resolves to (if "auto" or unset, note that auto-detection is active).
