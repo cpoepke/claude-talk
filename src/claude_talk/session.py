@@ -33,13 +33,13 @@ class SessionStore:
         except Exception:
             pass
 
-    def claim(self, session_id: str, personality: str = "unknown") -> None:
+    def claim(self, session_id: str, personality: str = "unknown", voice: str | None = None) -> None:
         now = datetime.now(timezone.utc).isoformat()
         self.db.execute(
-            "INSERT INTO sessions (session_id, status, personality, started_at, updated_at) "
-            "VALUES (?, 'active', ?, ?, ?) "
-            "ON CONFLICT(session_id) DO UPDATE SET status='active', personality=?, started_at=?, updated_at=?",
-            (session_id, personality, now, now, personality, now, now),
+            "INSERT INTO sessions (session_id, status, personality, voice, started_at, updated_at) "
+            "VALUES (?, 'active', ?, ?, ?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET status='active', personality=?, voice=?, started_at=?, updated_at=?",
+            (session_id, personality, voice, now, now, personality, voice, now, now),
         )
         self.db.commit()
 
@@ -66,3 +66,42 @@ class SessionStore:
     def list_sessions(self) -> list[dict]:
         rows = self.db.execute("SELECT * FROM sessions").fetchall()
         return [dict(r) for r in rows]
+
+    def check_or_claim(self, session_id: str) -> bool:
+        """Check if session is active; if old state file says active but session isn't claimed, claim it.
+        Returns True if this session is active, False otherwise."""
+        # Check if already active
+        if self.is_active(session_id):
+            return True
+
+        # Migration: check old state file
+        state_file = Path.home() / ".claude-talk/state"
+        if state_file.exists():
+            content = state_file.read_text()
+            for line in content.splitlines():
+                if line.strip().startswith("SESSION="):
+                    _, _, value = line.partition("=")
+                    if value.strip() == "active":
+                        # Old state says active but this session isn't claimed — claim it
+                        self.claim(session_id, "unknown")
+                        return True
+
+        return False
+
+    def update_personality(self, session_id: str, personality: str, voice: str | None = None) -> None:
+        """Update personality and voice for a session."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.db.execute(
+            "UPDATE sessions SET personality=?, voice=?, updated_at=? WHERE session_id=?",
+            (personality, voice, now, session_id),
+        )
+        self.db.commit()
+
+    def get_personality(self, session_id: str) -> dict | None:
+        """Get personality and voice for a session."""
+        row = self.db.execute(
+            "SELECT personality, voice FROM sessions WHERE session_id=?", (session_id,)
+        ).fetchone()
+        if row:
+            return {"personality": row["personality"], "voice": row["voice"]}
+        return None

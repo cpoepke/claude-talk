@@ -37,16 +37,17 @@ Keep the full personality.md content in your context for the duration of this vo
 
 Start the audio server and wait for readiness (use Bash):
 ```bash
-claude-talk server start
+source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server start
 ```
 
 If it fails, tell the user and abort.
 
 ### 3. Activate Voice Session
 
-Claim the voice session (use Bash):
+Claim the session with the active personality and voice (use Bash):
 ```bash
-claude-talk session claim "$SESSION_ID" 2>/dev/null || true
+source ~/.claude-talk/venvs/wlk/bin/activate
+claude-talk session claim-active "$SESSION_ID"
 claude-talk state set SESSION active
 ```
 

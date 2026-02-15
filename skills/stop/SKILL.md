@@ -12,6 +12,7 @@ Gracefully shut down the voice chat session.
 
 1. Release the active session and stop server (use Bash):
    ```bash
+   source ~/.claude-talk/venvs/wlk/bin/activate
    # Get the active session and release it
    ACTIVE_SESSION=$(claude-talk session active 2>/dev/null)
    if [ -n "$ACTIVE_SESSION" ]; then

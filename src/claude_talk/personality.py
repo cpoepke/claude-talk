@@ -4,6 +4,9 @@ import re
 import shutil
 from pathlib import Path
 
+from .db import DB
+from .session import SessionStore
+
 PERSONALITIES_DIR = Path.home() / ".claude-talk/personalities"
 ACTIVE_FILE = Path.home() / ".claude-talk/active-personality"
 PERSONALITY_FILE = Path.home() / ".claude-talk/personality.md"
@@ -47,8 +50,13 @@ def _parse_personality(content: str, name: str) -> dict:
     return result
 
 
-def switch_personality(name: str) -> dict:
-    """Switch active personality. Returns personality dict."""
+def switch_personality(name: str, update_session: bool = True) -> dict:
+    """Switch active personality. Returns personality dict.
+
+    Args:
+        name: Personality name
+        update_session: If True, also update the active session's personality/voice
+    """
     path = PERSONALITIES_DIR / f"{name}.md"
     if not path.exists():
         raise FileNotFoundError(f"Personality '{name}' not found")
@@ -66,6 +74,13 @@ def switch_personality(name: str) -> dict:
     voice = info.get("voice")
     if voice:
         _update_config_voice(voice)
+
+    # Update active session if requested
+    if update_session:
+        store = SessionStore(DB())
+        session_id = store.get_active()
+        if session_id:
+            store.update_personality(session_id, name, voice)
 
     return info
 
@@ -109,3 +124,16 @@ def get_active_personality() -> str | None:
         if name:
             return name
     return None
+
+
+def load_session_personality(session_id: str) -> dict:
+    """Load personality for a specific session. Falls back to global if not set."""
+    store = SessionStore(DB())
+    session_info = store.get_personality(session_id)
+
+    if session_info and session_info.get("personality"):
+        # Load session's personality
+        return load_personality(session_info["personality"])
+
+    # Fall back to global active personality
+    return load_personality()

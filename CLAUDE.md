@@ -22,12 +22,27 @@ All processing is local except the Claude API call.
 
 `claude-talk` binary (installed via `pip install -e .` into WLK venv):
 - `claude-talk server start|stop|status` - Audio server lifecycle
-- `claude-talk session claim|release|is-active|list|active` - Session management (SQLite-backed)
+- `claude-talk session claim|claim-active|release|is-active|check-or-claim|list|active` - Session management (SQLite-backed)
+- `claude-talk session update-personality|get-personality` - Per-session personality tracking
 - `claude-talk config [KEY=VALUE]` - View/set config
 - `claude-talk devices` - List audio devices
 - `claude-talk voices [--enhanced]` - List macOS TTS voices
 - `claude-talk personality list|switch|active` - Personality management
 - `claude-talk state set KEY VALUE` - Set session state (legacy compat)
+
+## Principles
+
+**Keep logic in Python, not shell:**
+- ALL business logic goes in Python package (`src/claude_talk/`)
+- Skills and hooks should ONLY call `claude-talk` CLI commands
+- NEVER extract/parse config files in bash (use `claude-talk` commands instead)
+- If you need to combine multiple pieces of data, add a Python CLI command
+- Example: Don't do `grep VOICE config.env | cut -d= -f2` in bash — add a `claude-talk config get VOICE` command
+
+**Thin hooks:**
+- Hooks should be minimal bash that calls Python CLI
+- No logic beyond session checks and curl to audio server
+- All state management through Python CLI commands
 
 ## Key paths
 

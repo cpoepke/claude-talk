@@ -8,6 +8,9 @@
 # to start listening immediately (/queue-listen) so the mic is hot while
 # Claude thinks. Next /speak checks the buffer first.
 
+# Activate venv for claude-talk CLI
+source "$HOME/.claude-talk/venvs/wlk/bin/activate"
+
 INPUT=$(cat)
 
 # Extract session ID from hook input
@@ -16,10 +19,22 @@ if [[ -z "$SESSION_ID" ]]; then
   exit 0
 fi
 
-# Check if THIS session is the active voice session
-if ! claude-talk session is-active "$SESSION_ID" 2>/dev/null; then
+# Check if this session is active (claims it if old state file says active)
+if ! claude-talk session check-or-claim "$SESSION_ID" 2>/dev/null; then
   # Not our session — exit silently
   exit 0
+fi
+
+# Load session's personality and update audio server voice if needed
+SESSION_INFO=$(claude-talk session get-personality "$SESSION_ID" 2>/dev/null)
+if [[ -n "$SESSION_INFO" ]]; then
+  SESSION_VOICE=$(echo "$SESSION_INFO" | jq -r '.voice // empty')
+  if [[ -n "$SESSION_VOICE" ]]; then
+    # Update audio server voice for this session
+    curl -s -X POST http://localhost:8150/voice \
+      -H 'Content-Type: application/json' \
+      -d "$(jq -n --arg voice "$SESSION_VOICE" '{voice: $voice}')" >/dev/null 2>&1
+  fi
 fi
 
 # Extract last assistant text from transcript JSONL

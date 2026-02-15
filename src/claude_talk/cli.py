@@ -108,11 +108,30 @@ def _get_store() -> SessionStore:
 @session.command()
 @click.argument("session_id")
 @click.argument("personality", default="unknown")
-def claim(session_id, personality):
-    """Claim a voice session."""
+@click.option("--voice", default=None, help="TTS voice for this session")
+def claim(session_id, personality, voice):
+    """Claim a voice session with specific personality and voice."""
     store = _get_store()
-    store.claim(session_id, personality)
+    store.claim(session_id, personality, voice)
     click.echo(f"Session {session_id} claimed", err=True)
+
+
+@session.command("claim-active")
+@click.argument("session_id")
+def claim_active(session_id):
+    """Claim a voice session using the active personality from config files."""
+    from .personality import get_active_personality
+    config = Config()
+
+    # Get active personality name
+    personality = get_active_personality() or "unknown"
+
+    # Get voice from config
+    voice = config.get("VOICE")
+
+    store = _get_store()
+    store.claim(session_id, personality, voice)
+    click.echo(f"Session {session_id} claimed with {personality} ({voice})", err=True)
 
 
 @session.command()
@@ -133,6 +152,15 @@ def is_active(session_id):
         sys.exit(1)
 
 
+@session.command("check-or-claim")
+@click.argument("session_id")
+def check_or_claim(session_id):
+    """Check if session is active; claim it if old state file says active. Exit 0 if active, 1 if not."""
+    store = _get_store()
+    if not store.check_or_claim(session_id):
+        sys.exit(1)
+
+
 @session.command("list")
 def list_sessions():
     """List all sessions."""
@@ -148,6 +176,29 @@ def active():
     sid = store.get_active()
     if sid:
         click.echo(sid)
+    else:
+        sys.exit(1)
+
+
+@session.command("update-personality")
+@click.argument("session_id")
+@click.argument("personality")
+@click.option("--voice", default=None, help="TTS voice")
+def update_personality(session_id, personality, voice):
+    """Update personality and voice for a session."""
+    store = _get_store()
+    store.update_personality(session_id, personality, voice)
+    click.echo(f"Updated session {session_id} personality to {personality}", err=True)
+
+
+@session.command("get-personality")
+@click.argument("session_id")
+def get_personality(session_id):
+    """Get personality and voice for a session."""
+    store = _get_store()
+    info = store.get_personality(session_id)
+    if info:
+        click.echo(json.dumps(info))
     else:
         sys.exit(1)
 
