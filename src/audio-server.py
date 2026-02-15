@@ -1068,6 +1068,7 @@ class StatusResponse(BaseModel):
     blackhole_device: int | None = None
     auto_device: bool = False
     voice: str = ""
+    volume: int = 50
 
 
 class TextResponse(BaseModel):
@@ -1116,6 +1117,10 @@ async def get_status() -> StatusResponse:
     input_dev = sd.query_devices(audio_engine.device_index)
     default_out = sd.default.device[1]
     output_dev = sd.query_devices(int(default_out)) if default_out is not None else {}
+
+    # Get current volume
+    volume_info = await get_volume()
+
     return StatusResponse(
         state=state.get("STATUS", "idle"),
         muted=state.get("MUTED", "false") == "true",
@@ -1127,6 +1132,7 @@ async def get_status() -> StatusResponse:
         blackhole_device=audio_engine.blackhole_device,
         auto_device=audio_engine._auto_device,
         voice=audio_engine.voice,
+        volume=volume_info["volume"],
     )
 
 
@@ -1200,6 +1206,54 @@ async def set_voice(req: dict):
         return {"error": "voice is required"}, 400
     audio_engine.voice = voice
     return {"voice": audio_engine.voice}
+
+
+@app.get("/volume")
+async def get_volume() -> dict[str, int]:
+    """Get current system output volume (0-100)"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "osascript", "-e", "output volume of (get volume settings)",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        volume = int(stdout.decode().strip())
+        return {"volume": volume}
+    except Exception:
+        return {"volume": 50}  # fallback
+
+
+@app.post("/volume/up")
+async def volume_up() -> dict[str, int]:
+    """Increase system volume by 10%"""
+    current = await get_volume()
+    new_volume = min(100, current["volume"] + 10)
+    try:
+        await asyncio.create_subprocess_exec(
+            "osascript", "-e", f"set volume output volume {new_volume}",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return {"volume": new_volume}
+    except Exception:
+        return current
+
+
+@app.post("/volume/down")
+async def volume_down() -> dict[str, int]:
+    """Decrease system volume by 10%"""
+    current = await get_volume()
+    new_volume = max(0, current["volume"] - 10)
+    try:
+        await asyncio.create_subprocess_exec(
+            "osascript", "-e", f"set volume output volume {new_volume}",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return {"volume": new_volume}
+    except Exception:
+        return current
 
 
 @app.post("/stop")

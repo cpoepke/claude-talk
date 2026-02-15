@@ -11,11 +11,12 @@ set -euo pipefail
 # Read JSON from stdin
 INPUT=$(cat)
 
-# Extract model, workspace, and team
+# Extract model, workspace, team, and session
 MODEL=$(echo "$INPUT" | jq -r '.model.display_name // empty' 2>/dev/null || echo "")
 CWD=$(echo "$INPUT" | jq -r '.workspace.current_dir // empty' 2>/dev/null || echo "")
 DIR_NAME=$(basename "$CWD" 2>/dev/null || echo "")
 TEAM=$(echo "$INPUT" | jq -r '.team.name // empty' 2>/dev/null || echo "")
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null || echo "")
 
 # Git info
 GIT_STATUS=""
@@ -32,29 +33,46 @@ fi
 
 # Voice state
 VOICE_INDICATOR=""
+PERSONALITY_INFO=""
 STATE_FILE="$HOME/.claude-talk/state"
 if [[ -f "$STATE_FILE" ]]; then
     SESSION=$(grep "^SESSION=" "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo "")
     if [[ "$SESSION" == "active" ]]; then
+        # Get active personality display name (with emoji) and color
+        PERSONALITY_JSON=$(source "$HOME/.claude-talk/venvs/wlk/bin/activate" && claude-talk personality display --json 2>/dev/null || echo "")
+        if [[ -n "$PERSONALITY_JSON" ]]; then
+            ACTIVE_PERSONALITY=$(echo "$PERSONALITY_JSON" | jq -r '.display_name // empty' 2>/dev/null || echo "")
+            PERSONALITY_COLOR=$(echo "$PERSONALITY_JSON" | jq -r '.color // "95"' 2>/dev/null || echo "95")
+            if [[ -n "$ACTIVE_PERSONALITY" ]]; then
+                PERSONALITY_INFO="\033[${PERSONALITY_COLOR}m${ACTIVE_PERSONALITY}\033[0m"
+            fi
+        fi
+        # Add session UUID (first 8 chars)
+        if [[ -n "$SESSION_ID" ]]; then
+            SHORT_SESSION="${SESSION_ID:0:8}"
+            PERSONALITY_INFO="${PERSONALITY_INFO:+$PERSONALITY_INFO | }\033[90m${SHORT_SESSION}\033[0m"
+        fi
         STATUS=$(grep "^STATUS=" "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo "")
         MUTED=$(grep "^MUTED=" "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo "")
         # Fetch live device info from audio server
         DEVICE_INFO=""
-        SERVER_JSON=$(curl -s --max-time 1 http://localhost:8150/status 2>/dev/null || echo "")
+        SERVER_JSON=$(source "$HOME/.claude-talk/venvs/wlk/bin/activate" && claude-talk server status --json 2>/dev/null || echo "")
         if [[ -n "$SERVER_JSON" ]]; then
             INPUT_DEV=$(echo "$SERVER_JSON" | jq -r '.input_device // empty' 2>/dev/null || echo "")
             OUTPUT_DEV=$(echo "$SERVER_JSON" | jq -r '.output_device // empty' 2>/dev/null || echo "")
             BARGE=$(echo "$SERVER_JSON" | jq -r '.barge_in // empty' 2>/dev/null || echo "")
+            VOLUME=$(echo "$SERVER_JSON" | jq -r '.volume // empty' 2>/dev/null || echo "")
             # Shorten common prefixes
             SHORT_IN=$(echo "$INPUT_DEV" | sed 's/MacBook Pro-//')
             SHORT_OUT=$(echo "$OUTPUT_DEV" | sed 's/MacBook Pro-//')
             [[ -n "$SHORT_IN" ]] && DEVICE_INFO="🎤 \033[37m${SHORT_IN}\033[0m"
             [[ -n "$SHORT_OUT" ]] && DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }🔈 \033[37m${SHORT_OUT}\033[0m"
             if [[ "$BARGE" == "true" ]]; then
-                DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }\033[32m⚡ barge-in:on\033[0m"
+                DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }\033[33m⚡\033[32m barge-in:on\033[0m"
             else
                 DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }\033[90mbarge-in:off\033[0m"
             fi
+            [[ -n "$VOLUME" ]] && DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }🔊 \033[37m${VOLUME}%\033[0m"
         fi
 
         if [[ "$MUTED" == "true" ]]; then
@@ -72,6 +90,8 @@ if [[ -f "$STATE_FILE" ]]; then
         fi
         # Append device info with pipe separator
         [[ -n "$DEVICE_INFO" ]] && VOICE_INDICATOR="${VOICE_INDICATOR} \033[2m|\033[0m ${DEVICE_INFO}"
+        # Append personality info
+        [[ -n "$PERSONALITY_INFO" ]] && VOICE_INDICATOR="${VOICE_INDICATOR} \033[2m|\033[0m ${PERSONALITY_INFO}"
     fi
 fi
 

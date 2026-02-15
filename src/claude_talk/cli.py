@@ -260,20 +260,34 @@ def claim(session_id, personality, voice):
 
 @session.command("claim-active")
 @click.argument("session_id")
-def claim_active(session_id):
-    """Claim a voice session using the active personality from config files."""
-    from .personality import get_active_personality
+@click.option("--personality", help="Personality to claim (uses DEFAULT_PERSONALITY if not specified)")
+def claim_active(session_id, personality):
+    """Claim a voice session with a personality from config."""
     config = Config()
 
-    # Get active personality name
-    personality = get_active_personality() or "unknown"
+    # Get personality to use
+    if not personality:
+        personality = config.get("DEFAULT_PERSONALITY", "claude")
 
-    # Get voice from config
-    voice = config.get("VOICE")
+    # Load voice from personality template
+    voice = None
+    if personality != "unknown":
+        from .personality import load_personality
+        info = load_personality(personality)
+        voice = info.get("voice")
+
+    # Fallback to config voice
+    if not voice:
+        voice = config.get("VOICE")
 
     store = _get_store()
-    store.claim(session_id, personality, voice)
-    click.echo(f"Session {session_id} claimed with {personality} ({voice})", err=True)
+    try:
+        store.claim(session_id, personality, voice)
+        click.echo(f"Session {session_id[:8]}... claimed with {personality} ({voice})", err=True)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        click.echo(f"Tip: Use --personality to specify a different personality", err=True)
+        sys.exit(1)
 
 
 @session.command()
@@ -463,6 +477,9 @@ def switch(name, session_id):
         click.echo(f"Switched session {session_id[:8]}... to {name} (voice: {voice})")
     except FileNotFoundError as e:
         click.echo(str(e), err=True)
+        sys.exit(1)
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 

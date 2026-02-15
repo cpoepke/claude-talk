@@ -34,7 +34,21 @@ class SessionStore:
             pass
 
     def claim(self, session_id: str, personality: str = "unknown", voice: str | None = None, is_primary: bool = False) -> None:
+        """Claim a session with a personality.
+
+        Raises:
+            ValueError: If personality is already claimed by another active session
+        """
         now = datetime.now(timezone.utc).isoformat()
+
+        # Check if personality is already claimed by another active session
+        if personality != "unknown":
+            existing = self.db.execute(
+                "SELECT session_id FROM sessions WHERE personality=? AND status='active' AND session_id!=?",
+                (personality, session_id),
+            ).fetchone()
+            if existing:
+                raise ValueError(f"Personality '{personality}' already claimed by session {existing['session_id'][:8]}...")
 
         # If no primary session exists, make this one primary
         if not is_primary:
@@ -123,7 +137,20 @@ class SessionStore:
         return False
 
     def update_personality(self, session_id: str, personality: str, voice: str | None = None) -> None:
-        """Update personality and voice for a session."""
+        """Update personality and voice for a session.
+
+        Raises:
+            ValueError: If personality is already claimed by another active session
+        """
+        # Check if personality is already claimed by another active session
+        if personality != "unknown":
+            existing = self.db.execute(
+                "SELECT session_id FROM sessions WHERE personality=? AND status='active' AND session_id!=?",
+                (personality, session_id),
+            ).fetchone()
+            if existing:
+                raise ValueError(f"Personality '{personality}' already claimed by session {existing['session_id'][:8]}...")
+
         now = datetime.now(timezone.utc).isoformat()
         self.db.execute(
             "UPDATE sessions SET personality=?, voice=?, updated_at=? WHERE session_id=?",
@@ -158,3 +185,26 @@ class SessionStore:
             (now, session_id),
         )
         self.db.commit()
+
+    def is_personality_available(self, personality: str, exclude_session: str | None = None) -> bool:
+        """Check if a personality name is available (not claimed by another active session).
+
+        Args:
+            personality: Personality name to check
+            exclude_session: Session ID to exclude from check (for updates)
+
+        Returns:
+            True if available, False if already claimed
+        """
+        if personality == "unknown":
+            return True
+
+        query = "SELECT session_id FROM sessions WHERE personality=? AND status='active'"
+        params = [personality]
+
+        if exclude_session:
+            query += " AND session_id!=?"
+            params.append(exclude_session)
+
+        existing = self.db.execute(query, tuple(params)).fetchone()
+        return existing is None

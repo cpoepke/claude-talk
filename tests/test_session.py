@@ -79,3 +79,57 @@ def test_migrate_json(tmp_path, monkeypatch):
     # Legacy file should be renamed
     assert not legacy.exists()
     assert legacy.with_suffix(".json.bak").exists()
+
+
+def test_unique_personality_enforcement(tmp_path):
+    """Test that personalities are unique across active sessions."""
+    store, db = _make_store(tmp_path)
+    # First claim succeeds
+    store.claim("session-1", "bonnie", "Fiona")
+    assert store.is_active("session-1")
+
+    # Second claim with same personality fails
+    import pytest
+    with pytest.raises(ValueError, match="already claimed"):
+        store.claim("session-2", "bonnie", "Fiona")
+
+    # Different personality succeeds
+    store.claim("session-2", "sheila", "Karen")
+    assert store.is_active("session-2")
+
+
+def test_is_personality_available(tmp_path):
+    """Test personality availability checking."""
+    store, db = _make_store(tmp_path)
+    # Unknown is always available
+    assert store.is_personality_available("unknown")
+
+    # Unclaimed personality is available
+    assert store.is_personality_available("bonnie")
+
+    # Claimed personality is not available
+    store.claim("session-1", "bonnie", "Fiona")
+    assert not store.is_personality_available("bonnie")
+
+    # But available if excluding the session that has it
+    assert store.is_personality_available("bonnie", exclude_session="session-1")
+
+
+def test_update_personality_uniqueness(tmp_path):
+    """Test that update_personality enforces uniqueness."""
+    import pytest
+    store, db = _make_store(tmp_path)
+    store.claim("session-1", "bonnie", "Fiona")
+    store.claim("session-2", "sheila", "Karen")
+
+    # Can update to same personality (no-op)
+    store.update_personality("session-1", "bonnie", "Fiona")
+
+    # Cannot update to another active session's personality
+    with pytest.raises(ValueError, match="already claimed"):
+        store.update_personality("session-1", "sheila", "Karen")
+
+    # Can update to unclaimed personality
+    store.update_personality("session-1", "vex", "Zarvox")
+    info = store.get_personality("session-1")
+    assert info["personality"] == "vex"
