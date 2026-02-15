@@ -1128,8 +1128,9 @@ async def process_message_queue():
                 })
 
                 # Store response for the session to retrieve
-                # For now, we'll add it to state with session prefix
-                state.set(**{f"RESPONSE_{session_id}": response})
+                # Use a marker to indicate response is ready (even if empty)
+                response_value = response if response else "(silence)"
+                state.set(**{f"RESPONSE_{session_id}": response_value, f"READY_{session_id}": "true"})
 
             finally:
                 # Restore original voice
@@ -1272,16 +1273,25 @@ async def queue_speak(req: QueueSpeakRequest) -> dict:
 @app.get("/queue-response/{session_id}")
 async def get_queue_response(session_id: str) -> TextResponse:
     """Get and clear the response for a session (blocks until available)"""
-    # Poll for response with timeout
-    key = f"RESPONSE_{session_id}"
-    for _ in range(3600):  # 1 hour timeout (1 second intervals)
-        response = state.get(key)
-        if response is not None:
-            # Clear the response
-            state.set(**{key: None})
-            return TextResponse(text=response)
-        await asyncio.sleep(1)
-    return TextResponse(text="(timeout)")
+    try:
+        # Poll for response with timeout
+        ready_key = f"READY_{session_id}"
+        response_key = f"RESPONSE_{session_id}"
+
+        for _ in range(3600):  # 1 hour timeout (1 second intervals)
+            # Check if response is ready (queue processor sets READY flag)
+            if state.get(ready_key) == "true":
+                response = state.get(response_key) or "(silence)"
+                # Clear both keys
+                state.set(**{ready_key: "", response_key: ""})
+                return TextResponse(text=response)
+            await asyncio.sleep(1)
+        return TextResponse(text="(timeout)")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"ERROR in get_queue_response: {e}", file=sys.stderr, flush=True)
+        raise
 
 
 @app.get("/queue-status")
