@@ -344,3 +344,18 @@ def state_cmd(action, key, value):
                 state[k.strip()] = v.strip()
     state[key] = value
     state_file.write_text("\n".join(f"{k}={v}" for k, v in state.items()) + "\n")
+
+
+# ── Hook commands ────────────────────────────────────────────────────────────
+
+
+@cli.group()
+def hook():
+    """Hook implementations."""
+
+
+@hook.command("voice-stop")
+def hook_voice_stop():
+    """Voice stop hook: speak response, capture user speech, inject into conversation."""
+    from .hooks.voice_stop import run
+    run()
