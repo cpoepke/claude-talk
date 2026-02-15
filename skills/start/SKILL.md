@@ -44,10 +44,9 @@ If it fails, tell the user and abort.
 
 ### 3. Activate Voice Session
 
-Claim the session with the active personality and voice (use Bash):
+Set session state to active (use Bash). The hook will claim the session automatically on first run:
 ```bash
 source ~/.claude-talk/venvs/wlk/bin/activate
-claude-talk session claim-active "$SESSION_ID"
 claude-talk state set SESSION active
 ```
 

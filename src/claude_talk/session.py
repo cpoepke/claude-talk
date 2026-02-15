@@ -83,7 +83,12 @@ class SessionStore:
                     _, _, value = line.partition("=")
                     if value.strip() == "active":
                         # Old state says active but this session isn't claimed — claim it
-                        self.claim(session_id, "unknown")
+                        # Load active personality and voice
+                        from .config import Config
+                        from .personality import get_active_personality
+                        personality = get_active_personality() or "unknown"
+                        voice = Config().get("VOICE")
+                        self.claim(session_id, personality, voice)
                         return True
 
         return False
