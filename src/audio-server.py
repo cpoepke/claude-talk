@@ -396,7 +396,7 @@ class AudioEngine:
             self.blackhole_device = detect_blackhole_device()
         if self.blackhole_device is None:
             self.barge_in_enabled = False
-        self.barge_in_ratio = config.get_float("BARGE_IN_RATIO", 0.4)
+        self.barge_in_ratio = config.get_float("BARGE_IN_RATIO", 0.5)
 
         # TTS settings
         self.voice = config.get("VOICE", "Daniel")
@@ -413,10 +413,15 @@ class AudioEngine:
         self.aec = None
         if self.barge_in_enabled and self.blackhole_device is not None:
             try:
-                self.aec = SpeexAEC(frame_size=1600, filter_length=4800, sample_rate=16000)
-                print(f"  Speex AEC: enabled (frame=1600, filter=4800)")
+                self.aec = SpeexAEC(frame_size=320, filter_length=8000, sample_rate=16000)
+                print(f"  Speex AEC: enabled (frame=320, filter=8000)")
             except Exception as e:
                 print(f"  Speex AEC: unavailable ({e})", file=sys.stderr)
+
+        # TTS enforcer: track current say PID to prevent overlapping TTS
+        self._tts_pid: int | None = None
+        # Track when TTS last finished for post-TTS protection in all capture paths
+        self._tts_finished_at: float = 0.0
 
         # Buffered listen: pre-captured text from /queue-listen
         self._buffered_text: str | None = None
@@ -437,7 +442,17 @@ class AudioEngine:
     async def speak(self, text: str) -> int | None:
         """
         Speak text via macOS `say`. Returns PID if successful, None if failed.
+        Kills any previous TTS process to prevent overlap.
         """
+        # TTS enforcer: kill previous say process if still running
+        if self._tts_pid is not None:
+            try:
+                os.kill(self._tts_pid, signal.SIGTERM)
+                print(f"[TTS] killed previous say (pid={self._tts_pid})", file=sys.stderr, flush=True)
+            except ProcessLookupError:
+                pass
+            self._tts_pid = None
+
         self.state.set(STATUS="speaking")
         self.logger.log_event("TTS_START", {"text": text, "voice": self.voice})
         try:
@@ -449,6 +464,7 @@ class AudioEngine:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
+            self._tts_pid = proc.pid
             return proc.pid
         except Exception as e:
             print(f"TTS failed: {e}", file=sys.stderr)
@@ -613,7 +629,7 @@ class AudioEngine:
         text_result = ""
         last_text_change = 0.0
         got_text = False
-        frame_size = int(self.sample_rate * 0.1)  # 100ms chunks
+        frame_size = int(self.sample_rate * 0.02)  # 20ms chunks (320 samples, matches AEC frame)
 
         # TTS monitoring
         tts_active = tts_pid > 0
@@ -635,7 +651,8 @@ class AudioEngine:
 
         loop = asyncio.get_event_loop()
         audio_queue: asyncio.Queue = asyncio.Queue()
-        ref_queue: asyncio.Queue = asyncio.Queue()
+        barge_ref_queue: asyncio.Queue = asyncio.Queue()  # ref frames for barge-in detection
+        send_ref_queue: asyncio.Queue = asyncio.Queue()   # ref frames for AEC in send path
         done_event = asyncio.Event()
 
         def audio_callback(indata, frames, time_info, status):
@@ -643,7 +660,9 @@ class AudioEngine:
             loop.call_soon_threadsafe(audio_queue.put_nowait, boosted)
 
         def ref_callback(indata, frames, time_info, status):
-            loop.call_soon_threadsafe(ref_queue.put_nowait, indata.copy())
+            frame = indata.copy()
+            loop.call_soon_threadsafe(barge_ref_queue.put_nowait, frame)
+            loop.call_soon_threadsafe(send_ref_queue.put_nowait, frame)
 
         # Mic stream
         mic_stream = sd.InputStream(
@@ -676,6 +695,7 @@ class AudioEngine:
                     os.kill(tts_pid, 0)
                 except ProcessLookupError:
                     self.logger.log_event("TTS_STOPPED_NATURAL", {"pid": tts_pid})
+                    self._tts_finished_at = time.monotonic()
                     tts_done_event.set()
                     return
                 await asyncio.sleep(0.05)
@@ -691,13 +711,13 @@ class AudioEngine:
             if tts_done_event.is_set():
                 return
 
-            # Unified calibration + detection loop
-            CALIBRATION_FRAMES = 8  # ~0.8s at 100ms/frame
-            baseline_rms: list[float] = []
+            # Geigel double-talk detection: compare raw mic/reference ratio
+            # Echo = ~5-12% of reference, real speech = 40%+ (see docs/barge-in-setup.md)
             buffered_mic_frames: list[np.ndarray] = []
             spike_count = 0
             frame_count = 0
-            threshold = 0.0
+            nonsplke_run = 0  # consecutive non-spike frames (for slow decay)
+            ratio_threshold = self.barge_in_ratio  # from config (default 0.15)
 
             while not done_event.is_set() and not tts_done_event.is_set():
                 mic_frame = None
@@ -708,49 +728,62 @@ class AudioEngine:
                     await asyncio.sleep(0.05)
                     continue
 
-                # Apply AEC if available: cancel TTS echo from mic signal
-                if self.aec is not None:
-                    ref_frame = None
-                    while not ref_queue.empty():
-                        ref_frame = ref_queue.get_nowait()
-                    if ref_frame is not None:
-                        try:
-                            mic_frame = self.aec.cancel(mic_frame.flatten(), ref_frame.flatten())
-                            mic_frame = mic_frame.reshape(-1, 1)
-                        except Exception:
-                            pass
+                # Get raw mic RMS BEFORE AEC for barge-in detection
+                raw_mic_rms = float(np.sqrt(np.mean(mic_frame.astype(np.float64) ** 2)))
+
+                # Get reference RMS (TTS output via BlackHole)
+                ref_frame = None
+                while not barge_ref_queue.empty():
+                    ref_frame = barge_ref_queue.get_nowait()
+                ref_rms = 0.0
+                if ref_frame is not None:
+                    ref_rms = float(np.sqrt(np.mean(ref_frame.astype(np.float64) ** 2)))
+
+                # Apply AEC for the buffered frames (used later for WLK send)
+                if self.aec is not None and ref_frame is not None:
+                    try:
+                        mic_frame = self.aec.cancel(mic_frame.flatten(), ref_frame.flatten())
+                        mic_frame = mic_frame.reshape(-1, 1)
+                    except Exception:
+                        pass
 
                 buffered_mic_frames.append(mic_frame)
-                mic_rms = float(np.sqrt(np.mean(mic_frame.astype(np.float64) ** 2)))
                 frame_count += 1
 
-                # Calibration: measure mic RMS during TTS (speaker bleed baseline)
-                if frame_count <= CALIBRATION_FRAMES:
-                    baseline_rms.append(mic_rms)
-                    if frame_count == CALIBRATION_FRAMES:
-                        baseline = sum(baseline_rms) / len(baseline_rms)
-                        # With AEC: residual is low (~50-180), speech adds ~200-500 on top
-                        # Without AEC: raw bleed is high (~300-800), speech adds ~500-1000
-                        if self.aec is not None:
-                            threshold = max(baseline * 3.0, 200)
-                        else:
-                            threshold = max(baseline * 2.5, 1200)
-                        print(f"[BARGE-IN] calibrated: baseline={baseline:.0f} threshold={threshold:.0f}", file=sys.stderr, flush=True)
+                # Skip first few frames for stabilization
+                if frame_count <= 5:
                     await asyncio.sleep(0.05)
                     continue
 
-                # Detection — log every 5th frame for tuning visibility
-                if frame_count % 5 == 0:
-                    print(f"[BARGE-IN] rms={mic_rms:.0f} thr={threshold:.0f} spk={spike_count}", file=sys.stderr, flush=True)
-                if mic_rms > threshold:
-                    spike_count += 1
-                    print(f"[BARGE-IN] spike! mic_rms={mic_rms:.0f} threshold={threshold:.0f} spikes={spike_count}", file=sys.stderr, flush=True)
+                # Geigel ratio detection: mic/reference
+                # Require both: ratio exceeds threshold AND mic RMS is loud enough to be speech
+                min_speech_rms = 500  # Real speech is typically 1000+ RMS; echo bleed is 80-500
+                if ref_rms > 100:  # Only detect when TTS is actively playing
+                    ratio = raw_mic_rms / ref_rms
+                    if frame_count % 10 == 0:
+                        print(f"[BARGE-IN] mic={raw_mic_rms:.0f} ref={ref_rms:.0f} ratio={ratio:.2f} thr={ratio_threshold} spk={spike_count}", file=sys.stderr, flush=True)
+                    if ratio > ratio_threshold and raw_mic_rms > min_speech_rms:
+                        spike_count += 1
+                        nonsplke_run = 0
+                        if spike_count >= 2:
+                            print(f"[BARGE-IN] spike! ratio={ratio:.2f} spikes={spike_count}", file=sys.stderr, flush=True)
+                    else:
+                        # Slow decay: only decrement after 3 consecutive non-spike frames
+                        # (20ms frames = 5x more frames than 100ms, so decay must be slower)
+                        nonsplke_run += 1
+                        if nonsplke_run >= 3:
+                            spike_count = max(0, spike_count - 1)
+                            nonsplke_run = 0
                 else:
-                    spike_count = max(0, spike_count - 1)
+                    # TTS pausing — slow decay
+                    nonsplke_run += 1
+                    if nonsplke_run >= 3:
+                        spike_count = max(0, spike_count - 1)
+                        nonsplke_run = 0
 
                 if spike_count >= 4:
-                    self.logger.log_event("BARGE_IN_DETECTED", {"mic_rms": mic_rms})
-                    print(f"BARGE-IN! mic_rms={mic_rms:.0f} (buffered {len(buffered_mic_frames)} frames for replay)", file=sys.stderr)
+                    self.logger.log_event("BARGE_IN_DETECTED", {"mic_rms": raw_mic_rms})
+                    print(f"BARGE-IN! mic_rms={raw_mic_rms:.0f} (buffered {len(buffered_mic_frames)} frames for replay)", file=sys.stderr)
                     barge_in_triggered = True
                     try:
                         os.kill(tts_pid, signal.SIGTERM)
@@ -762,8 +795,10 @@ class AudioEngine:
                     replay_start = max(0, len(buffered_mic_frames) - 3)
                     for frame in buffered_mic_frames[replay_start:]:
                         audio_queue.put_nowait(frame)
-                    while not ref_queue.empty():
-                        ref_queue.get_nowait()
+                    while not barge_ref_queue.empty():
+                        barge_ref_queue.get_nowait()
+                    while not send_ref_queue.empty():
+                        send_ref_queue.get_nowait()
                     return
 
                 await asyncio.sleep(0.05)
@@ -774,43 +809,86 @@ class AudioEngine:
             self.logger.log_event("CAPTURE_START")
             print(f"[DEBUG] TTS done, starting audio send", file=sys.stderr, flush=True)
             if tts_active and not barge_in_triggered:
-                # Wait for TTS echo/reverb to decay, then flush contaminated frames
-                # With AEC active we need less flush time
-                flush_delay = 1.0 if self.aec is not None else 2.5
-                await asyncio.sleep(flush_delay)
+                # Wait for TTS audio to actually stop playing (not just process exit)
+                # Monitor ref stream RMS — when it drops to near-zero, speakers are silent
+                if self.blackhole_device is not None:
+                    silent_frames = 0
+                    for _ in range(100):  # Max ~5s wait
+                        await asyncio.sleep(0.05)
+                        ref_frame = None
+                        while not send_ref_queue.empty():
+                            ref_frame = send_ref_queue.get_nowait()
+                        if ref_frame is not None:
+                            rms = float(np.sqrt(np.mean(ref_frame.astype(np.float64) ** 2)))
+                            if rms < 50:
+                                silent_frames += 1
+                            else:
+                                silent_frames = 0
+                            if silent_frames >= 10:  # ~500ms of silence on ref
+                                break
+                        else:
+                            silent_frames += 1
+                            if silent_frames >= 10:
+                                break
+                    print(f"[DEBUG] Ref stream silent", file=sys.stderr, flush=True)
+                    # Extra delay: speakers have hardware buffers that play after BlackHole goes silent
+                    # Plus room reverb tail. Mic still picks up residual audio.
+                    await asyncio.sleep(1.5)
+                    print(f"[DEBUG] Post-silence delay done, flushing mic buffer", file=sys.stderr, flush=True)
+                else:
+                    await asyncio.sleep(3.0)
+                # Flush any remaining contaminated frames
                 while not audio_queue.empty():
                     audio_queue.get_nowait()
-                while not ref_queue.empty():
-                    ref_queue.get_nowait()
+                while not send_ref_queue.empty():
+                    send_ref_queue.get_nowait()
             if not barge_in_enabled:
                 mic_stream.start()
 
             frame_count = 0
             send_failed = False
-            energy_gate = 150  # Min RMS to send real audio (below = silence substitute)
-            cooldown_gate = energy_gate * 3  # Stricter gate right after TTS
-            cooldown_end = time.monotonic() + 2.0 if tts_active else 0  # 2s post-TTS cooldown
+            # Post-TTS energy gate: suppress bleed frames after TTS
+            # Applies to ALL captures within 5s of TTS finishing (including /listen retries)
+            # With 8x mic gain, TTS bleed through speakers→mic is 500-900 RMS
+            # Real speech with gain is typically 2000+ RMS
+            time_since_tts = time.monotonic() - self._tts_finished_at if self._tts_finished_at > 0 else 999
+            remaining_gate = max(0, 3.0 - time_since_tts)
+            energy_gate_rms = 1000 if (tts_active or remaining_gate > 0) else 0
+            gate_until = time.monotonic() + (3.0 if tts_active else remaining_gate)
+            gate_consecutive = 0  # require 3+ consecutive loud frames to pass
+            if remaining_gate > 0 and not tts_active:
+                print(f"[GATE] Applying post-TTS gate to /listen call ({remaining_gate:.1f}s remaining)", file=sys.stderr, flush=True)
             try:
                 while not done_event.is_set() and not send_failed:
                     try:
                         data = await asyncio.wait_for(audio_queue.get(), timeout=0.5)
                         # Apply AEC to clean residual echo from mic frames
-                        if self.aec is not None and not ref_queue.empty():
+                        if self.aec is not None and not send_ref_queue.empty():
                             ref_frame = None
-                            while not ref_queue.empty():
-                                ref_frame = ref_queue.get_nowait()
+                            while not send_ref_queue.empty():
+                                ref_frame = send_ref_queue.get_nowait()
                             if ref_frame is not None:
                                 try:
                                     data = self.aec.cancel(data.flatten(), ref_frame.flatten())
                                     data = data.reshape(-1, 1)
                                 except Exception:
                                     pass
-                        # Energy gate: suppress low-energy frames (reverb/noise) to prevent WLK hallucinations
-                        frame_rms = float(np.sqrt(np.mean(data.astype(np.float64) ** 2)))
-                        now = time.monotonic()
-                        gate = cooldown_gate if now < cooldown_end else energy_gate
-                        if frame_rms < gate:
-                            data = np.zeros_like(data)  # Send silence to keep WLK timing
+                        # Energy gate: suppress residual TTS bleed after flush
+                        # Requires 3 consecutive loud frames to prevent isolated noise spikes
+                        if time.monotonic() < gate_until:
+                            frame_rms = float(np.sqrt(np.mean(data.astype(np.float64) ** 2)))
+                            if frame_count % 100 == 0:
+                                print(f"[GATE] rms={frame_rms:.0f} gate={energy_gate_rms} remaining={gate_until - time.monotonic():.1f}s", file=sys.stderr, flush=True)
+                            if frame_rms >= energy_gate_rms:
+                                gate_consecutive += 1
+                                if gate_consecutive < 3:
+                                    continue  # Not enough consecutive loud frames yet
+                                # Sustained loud audio — disable gate for rest of session
+                                gate_until = 0
+                                print(f"[GATE] speech detected (rms={frame_rms:.0f}), gate disabled", file=sys.stderr, flush=True)
+                            else:
+                                gate_consecutive = 0
+                                continue
                         # Resilience: wrap send in exception handler and add rate limiting
                         try:
                             await ws.send(data.tobytes())
@@ -818,7 +896,7 @@ class AudioEngine:
                             # Rate limiting: prevent overwhelming WLK with rapid frame bursts
                             if frame_count % 50 == 0:
                                 await asyncio.sleep(0.01)
-                            if frame_count % 10 == 0:
+                            if frame_count % 100 == 0:
                                 print(f"[DEBUG] Sent {frame_count} frames to WLK", file=sys.stderr, flush=True)
                         except websockets.exceptions.ConnectionClosed as e:
                             print(f"[WLK] send failed, connection closed: code={e.code} reason='{e.reason}'", file=sys.stderr, flush=True)
@@ -838,6 +916,8 @@ class AudioEngine:
         async def recv_transcription():
             """Receive and accumulate transcription from WLK"""
             nonlocal text_result, last_text_change, got_text
+            # Don't start unresponsive timer until we're actually sending audio
+            await tts_done_event.wait()
             idle_since = time.monotonic()
             msg_count = 0
 
@@ -847,7 +927,7 @@ class AudioEngine:
                     idle_since = time.monotonic()
                     msg_count += 1
                 except asyncio.TimeoutError:
-                    # Resilience: reduced timeout from 10s to 3s for faster failure detection
+                    # Resilience: 3s timeout for failure detection (only active after TTS done)
                     if time.monotonic() - idle_since > 3.0:
                         print("[WLK] unresponsive for 3s, ending capture", file=sys.stderr, flush=True)
                         done_event.set()
@@ -925,6 +1005,15 @@ class AudioEngine:
                     t.cancel()
                 await asyncio.gather(*tasks, return_exceptions=True)
         finally:
+            # Record TTS finish time for post-TTS protection in subsequent /listen calls
+            if tts_active:
+                self._tts_finished_at = time.monotonic()
+                # Also kill say if still running (e.g. capture ended before TTS finished)
+                if self._tts_pid:
+                    try:
+                        os.kill(self._tts_pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
             if barge_in_enabled:
                 mic_stream.stop()
                 mic_stream.close()

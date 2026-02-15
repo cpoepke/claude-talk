@@ -55,7 +55,7 @@ Settings in `~/.claude-talk/config.env`:
 |---------|---------|-------------|
 | `BARGE_IN` | `true` | Set to `false` to force-disable barge-in |
 | `BLACKHOLE_DEVICE` | (auto) | Explicit device index for BlackHole. Leave unset for auto-detection |
-| `BARGE_IN_RATIO` | `0.4` | Mic/reference ratio threshold. Lower = more sensitive, higher = less sensitive |
+| `BARGE_IN_RATIO` | `0.5` | Mic/reference ratio threshold. Lower = more sensitive, higher = less sensitive |
 
 ### Tuning the ratio
 
