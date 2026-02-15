@@ -81,15 +81,21 @@ def stop():
 
 
 @server.command()
-def status():
-    """Check if the audio server is running. Exit 0 if yes, 1 if no."""
+@click.option("--json", "output_json", is_flag=True, help="Output full status as JSON")
+def status(output_json):
+    """Check if the audio server is running. With --json, output full status."""
     config = Config()
     port = config.get_int("AUDIO_SERVER_PORT", 8150)
     try:
         import urllib.request
-        urllib.request.urlopen(f"http://localhost:{port}/status", timeout=2)
-        click.echo("running")
+        with urllib.request.urlopen(f"http://localhost:{port}/status", timeout=2) as response:
+            if output_json:
+                click.echo(response.read().decode())
+            else:
+                click.echo("running")
     except Exception:
+        if output_json:
+            click.echo("{}", err=True)
         sys.exit(1)
 
 
@@ -168,6 +174,62 @@ def queue_listen():
         )
         urllib.request.urlopen(req, timeout=2)
         click.echo("Queued")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@server.command("volume")
+def get_volume():
+    """Get current system volume (0-100)."""
+    config = Config()
+    port = config.get_int("AUDIO_SERVER_PORT", 8150)
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"http://localhost:{port}/volume")
+        with urllib.request.urlopen(req, timeout=2) as response:
+            data = json.loads(response.read().decode())
+            click.echo(data.get("volume", 50))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@server.command("volume-up")
+def volume_up():
+    """Increase system volume by 10%."""
+    config = Config()
+    port = config.get_int("AUDIO_SERVER_PORT", 8150)
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://localhost:{port}/volume/up",
+            data=b"",
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2) as response:
+            data = json.loads(response.read().decode())
+            click.echo(data.get("volume", 50))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@server.command("volume-down")
+def volume_down():
+    """Decrease system volume by 10%."""
+    config = Config()
+    port = config.get_int("AUDIO_SERVER_PORT", 8150)
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://localhost:{port}/volume/down",
+            data=b"",
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=2) as response:
+            data = json.loads(response.read().decode())
+            click.echo(data.get("volume", 50))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -366,52 +428,103 @@ def personality():
 
 @personality.command("list")
 def personality_list():
-    """List saved personalities."""
+    """List available personality templates."""
     from .personality import list_personalities
     plist = list_personalities()
     if not plist:
         click.echo("No personalities found.")
         return
     for p in plist:
-        marker = " ✓" if p.get("active") else ""
         voice = p.get("voice", "?")
         style = p.get("style", "?")
-        click.echo(f"  {p['name']:<20} {style:<25} {voice}{marker}")
+        click.echo(f"  {p['name']:<20} {style:<25} {voice}")
 
 
 @personality.command()
 @click.argument("name")
-def switch(name):
-    """Switch active personality."""
+@click.option("--session-id", help="Session ID (uses primary if not specified)")
+def switch(name, session_id):
+    """Switch personality for a session."""
     from .personality import switch_personality
+    from .db import DB
+    from .session import SessionStore
+
+    # Get session to update
+    if not session_id:
+        store = SessionStore(DB())
+        session_id = store.get_primary()
+        if not session_id:
+            click.echo("No primary session found. Specify --session-id explicitly.", err=True)
+            sys.exit(1)
+
     try:
-        info = switch_personality(name)
-        click.echo(f"Switched to {name}. Voice: {info.get('voice', '?')}")
+        info = switch_personality(session_id, name)
+        voice = info.get("voice", "?")
+        click.echo(f"Switched session {session_id[:8]}... to {name} (voice: {voice})")
     except FileNotFoundError as e:
         click.echo(str(e), err=True)
         sys.exit(1)
 
 
-@personality.command()
-def active():
-    """Show the active personality name."""
-    from .personality import get_active_personality
-    name = get_active_personality()
-    if name:
-        click.echo(name)
+@personality.command("show")
+@click.argument("session_id", required=False)
+def show(session_id):
+    """Show personality for a session."""
+    from .db import DB
+    from .session import SessionStore
+
+    # Get session
+    if not session_id:
+        store = SessionStore(DB())
+        session_id = store.get_primary()
+        if not session_id:
+            click.echo("No primary session found.", err=True)
+            sys.exit(1)
+
+    store = SessionStore(DB())
+    info = store.get_personality(session_id)
+    if info:
+        click.echo(f"Session {session_id[:8]}...: {info.get('personality', '?')} (voice: {info.get('voice', '?')})")
     else:
-        click.echo("(none)", err=True)
+        click.echo("Session not found.", err=True)
         sys.exit(1)
 
 
 @personality.command("display")
-def personality_display():
-    """Show the active personality display name (with emoji)."""
-    from .personality import load_personality
-    info = load_personality()
-    if info and info.get("display_name"):
+@click.argument("session_id", required=False)
+@click.option("--color", is_flag=True, help="Output color code for statusline")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON")
+def personality_display(session_id, color, output_json):
+    """Show personality display name for a session (for statusline)."""
+    from .personality import load_session_personality
+    from .db import DB
+    from .session import SessionStore
+    import json as json_lib
+
+    # Get session
+    if not session_id:
+        store = SessionStore(DB())
+        session_id = store.get_primary()
+        if not session_id:
+            click.echo("(none)", err=True)
+            sys.exit(1)
+
+    info = load_session_personality(session_id)
+    if not info:
+        click.echo("(none)", err=True)
+        sys.exit(1)
+
+    if output_json:
+        output = {
+            "display_name": info.get("display_name", info.get("identity_name", "(none)")),
+            "color": info.get("color", "95"),
+        }
+        click.echo(json_lib.dumps(output))
+    elif color:
+        click.echo(info.get("color", "95"))
+    elif info.get("display_name"):
         click.echo(info["display_name"])
-    elif info and info.get("identity_name"):
+    elif info.get("identity_name"):
         click.echo(info["identity_name"])
     else:
         click.echo("(none)", err=True)

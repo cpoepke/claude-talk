@@ -74,9 +74,15 @@ class SessionStore:
         rows = self.db.execute("SELECT * FROM sessions").fetchall()
         return [dict(r) for r in rows]
 
-    def check_or_claim(self, session_id: str) -> bool:
+    def check_or_claim(self, session_id: str, default_personality: str | None = None) -> bool:
         """Check if session is active; if old state file says active but session isn't claimed, claim it.
-        Returns True if this session is active, False otherwise."""
+
+        Args:
+            session_id: Session to check/claim
+            default_personality: Personality to use if claiming (uses config DEFAULT_PERSONALITY if None)
+
+        Returns True if this session is active, False otherwise.
+        """
         # Check if already active
         if self.is_active(session_id):
             return True
@@ -90,12 +96,28 @@ class SessionStore:
                     _, _, value = line.partition("=")
                     if value.strip() == "active":
                         # Old state says active but this session isn't claimed — claim it
-                        # Load active personality and voice
                         from .config import Config
-                        from .personality import get_active_personality
-                        personality = get_active_personality() or "unknown"
-                        voice = Config().get("VOICE")
-                        self.claim(session_id, personality, voice)
+                        config = Config()
+
+                        # Get personality to use
+                        if not default_personality:
+                            default_personality = config.get("DEFAULT_PERSONALITY", "claude")
+
+                        # Load voice from personality template
+                        voice = None
+                        if default_personality != "unknown":
+                            try:
+                                from .personality import load_personality
+                                info = load_personality(default_personality)
+                                voice = info.get("voice")
+                            except Exception:
+                                pass
+
+                        # Fallback to config if no voice from personality
+                        if not voice:
+                            voice = config.get("VOICE")
+
+                        self.claim(session_id, default_personality, voice)
                         return True
 
         return False

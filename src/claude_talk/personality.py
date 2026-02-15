@@ -1,25 +1,21 @@
-"""Personality file loading and switching."""
+"""Personality file loading and switching.
+
+Database is the single source of truth for session personalities.
+Global files (personality.md, active-personality) are DEPRECATED - only used for migration.
+Personalities/*.md are templates. Each session tracks its own personality in the database.
+"""
 
 import re
-import shutil
 from pathlib import Path
 
 from .db import DB
 from .session import SessionStore
 
 PERSONALITIES_DIR = Path.home() / ".claude-talk/personalities"
-ACTIVE_FILE = Path.home() / ".claude-talk/active-personality"
-PERSONALITY_FILE = Path.home() / ".claude-talk/personality.md"
-CONFIG_FILE = Path.home() / ".claude-talk/config.env"
 
 
-def load_personality(name: str | None = None) -> dict:
-    """Load a personality by name. Returns dict with name, voice, style, content."""
-    if name is None:
-        name = get_active_personality()
-    if name is None:
-        return {}
-
+def load_personality(name: str) -> dict:
+    """Load a personality template by name from personalities/ directory."""
     path = PERSONALITIES_DIR / f"{name}.md"
     if not path.exists():
         return {}
@@ -47,15 +43,39 @@ def _parse_personality(content: str, name: str) -> dict:
     if identity_match:
         result["identity_name"] = identity_match.group(1).strip()
 
+    # Extract display name (with emoji)
+    display_match = re.search(r"^- Display Name:\s*(.+)$", content, re.MULTILINE)
+    if display_match:
+        result["display_name"] = display_match.group(1).strip()
+    else:
+        # Fallback to identity_name if no display name
+        result["display_name"] = result.get("identity_name", name)
+
+    # Extract emoji
+    emoji_match = re.search(r"^- Emoji:\s*(.+)$", content, re.MULTILINE)
+    if emoji_match:
+        result["emoji"] = emoji_match.group(1).strip()
+
+    # Extract color code for statusline display
+    color_match = re.search(r"^- Color:\s*(.+)$", content, re.MULTILINE)
+    if color_match:
+        result["color"] = color_match.group(1).strip()
+    else:
+        # Default to magenta if no color specified
+        result["color"] = "95"
+
     return result
 
 
-def switch_personality(name: str, update_session: bool = True) -> dict:
-    """Switch active personality. Returns personality dict.
+def switch_personality(session_id: str, name: str) -> dict:
+    """Switch personality for a specific session.
 
     Args:
-        name: Personality name
-        update_session: If True, also update the active session's personality/voice
+        session_id: Session ID to update
+        name: Personality name from personalities/ directory
+
+    Returns:
+        Personality dict with name, voice, style, etc.
     """
     path = PERSONALITIES_DIR / f"{name}.md"
     if not path.exists():
@@ -64,76 +84,36 @@ def switch_personality(name: str, update_session: bool = True) -> dict:
     content = path.read_text()
     info = _parse_personality(content, name)
 
-    # Copy to personality.md
-    shutil.copy2(path, PERSONALITY_FILE)
-
-    # Update active-personality
-    ACTIVE_FILE.write_text(name)
-
-    # Update voice in config.env
+    # Update session's personality in database
     voice = info.get("voice")
-    if voice:
-        _update_config_voice(voice)
-
-    # Update active session if requested
-    if update_session:
-        store = SessionStore(DB())
-        session_id = store.get_active()
-        if session_id:
-            store.update_personality(session_id, name, voice)
+    store = SessionStore(DB())
+    store.update_personality(session_id, name, voice)
 
     return info
 
 
-def _update_config_voice(voice: str):
-    """Update VOICE= line in config.env."""
-    if not CONFIG_FILE.exists():
-        return
-    lines = CONFIG_FILE.read_text().splitlines()
-    found = False
-    quoted = f'"{voice}"' if " " in voice else voice
-    for i, line in enumerate(lines):
-        if line.startswith("VOICE="):
-            lines[i] = f"VOICE={quoted}"
-            found = True
-            break
-    if not found:
-        lines.append(f"VOICE={quoted}")
-    CONFIG_FILE.write_text("\n".join(lines) + "\n")
-
-
 def list_personalities() -> list[dict]:
-    """List all saved personalities with metadata."""
+    """List all personality templates from personalities/ directory."""
     if not PERSONALITIES_DIR.exists():
         return []
     result = []
-    active = get_active_personality()
     for path in sorted(PERSONALITIES_DIR.glob("*.md")):
         name = path.stem
         content = path.read_text()
         info = _parse_personality(content, name)
-        info["active"] = name == active
         result.append(info)
     return result
 
 
-def get_active_personality() -> str | None:
-    """Get the name of the active personality."""
-    if ACTIVE_FILE.exists():
-        name = ACTIVE_FILE.read_text().strip()
-        if name:
-            return name
-    return None
-
-
 def load_session_personality(session_id: str) -> dict:
-    """Load personality for a specific session. Falls back to global if not set."""
+    """Load personality for a specific session from database (single source of truth)."""
     store = SessionStore(DB())
     session_info = store.get_personality(session_id)
 
     if session_info and session_info.get("personality"):
-        # Load session's personality
-        return load_personality(session_info["personality"])
+        personality_name = session_info["personality"]
+        if personality_name != "unknown":
+            return load_personality(personality_name)
 
-    # Fall back to global active personality
-    return load_personality()
+    # No valid personality - return empty
+    return {}
