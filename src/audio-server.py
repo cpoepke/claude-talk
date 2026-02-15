@@ -1089,8 +1089,8 @@ event_logger = EventLogger(log_file)
 audio_engine = AudioEngine(config, state, event_logger)
 wlk_manager = WLKManager(config)
 
-# Message queue for multi-session voice handling
-message_queue: asyncio.Queue = asyncio.Queue()
+# Message queue for multi-session voice handling (initialized in lifespan)
+message_queue = None
 queue_processor_task = None
 
 
@@ -1148,7 +1148,10 @@ async def process_message_queue():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown"""
-    global queue_processor_task
+    global queue_processor_task, message_queue
+
+    # Initialize message queue in the event loop
+    message_queue = asyncio.Queue()
 
     state.set(SESSION="active", STATUS="idle", MUTED="false")
     await wlk_manager.start()
@@ -1242,6 +1245,9 @@ async def speak(req: SpeakRequest) -> TextResponse:
 @app.post("/queue-speak")
 async def queue_speak(req: QueueSpeakRequest) -> dict[str, str]:
     """Queue a TTS message with specific voice for sequential playback"""
+    if message_queue is None:
+        raise HTTPException(status_code=503, detail="Message queue not initialized")
+
     event_logger.log_event("API_QUEUE_SPEAK", {
         "session_id": req.session_id,
         "voice": req.voice,
@@ -1274,7 +1280,7 @@ async def get_queue_response(session_id: str) -> TextResponse:
 async def get_queue_status() -> dict:
     """Get current message queue status"""
     return {
-        "queue_size": message_queue.qsize(),
+        "queue_size": message_queue.qsize() if message_queue else 0,
         "processor_running": queue_processor_task is not None and not queue_processor_task.done()
     }
 
