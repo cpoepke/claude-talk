@@ -48,12 +48,12 @@ if [[ -f "$STATE_FILE" ]]; then
             # Shorten common prefixes
             SHORT_IN=$(echo "$INPUT_DEV" | sed 's/MacBook Pro-//')
             SHORT_OUT=$(echo "$OUTPUT_DEV" | sed 's/MacBook Pro-//')
-            [[ -n "$SHORT_IN" ]] && DEVICE_INFO="🎤 ${SHORT_IN}"
-            [[ -n "$SHORT_OUT" ]] && DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }🔈 ${SHORT_OUT}"
+            [[ -n "$SHORT_IN" ]] && DEVICE_INFO="🎤 \033[37m${SHORT_IN}\033[0m"
+            [[ -n "$SHORT_OUT" ]] && DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }🔈 \033[37m${SHORT_OUT}\033[0m"
             if [[ "$BARGE" == "true" ]]; then
-                DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }⚡ barge-in:on"
+                DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }\033[32m⚡ barge-in:on\033[0m"
             else
-                DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }barge-in:off"
+                DEVICE_INFO="${DEVICE_INFO:+$DEVICE_INFO | }\033[90mbarge-in:off\033[0m"
             fi
         fi
 
@@ -71,7 +71,7 @@ if [[ -f "$STATE_FILE" ]]; then
             VOICE_INDICATOR="\033[2m🎙 idle\033[0m"
         fi
         # Append device info with pipe separator
-        [[ -n "$DEVICE_INFO" ]] && VOICE_INDICATOR="${VOICE_INDICATOR} \033[2m| ${DEVICE_INFO}\033[0m"
+        [[ -n "$DEVICE_INFO" ]] && VOICE_INDICATOR="${VOICE_INDICATOR} \033[2m|\033[0m ${DEVICE_INFO}"
     fi
 fi
 

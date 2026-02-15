@@ -732,7 +732,7 @@ class AudioEngine:
                         # With AEC: residual is low (~50-180), speech adds ~200-500 on top
                         # Without AEC: raw bleed is high (~300-800), speech adds ~500-1000
                         if self.aec is not None:
-                            threshold = max(baseline * 3.0, 400)
+                            threshold = max(baseline * 3.0, 200)
                         else:
                             threshold = max(baseline * 2.5, 1200)
                         print(f"[BARGE-IN] calibrated: baseline={baseline:.0f} threshold={threshold:.0f}", file=sys.stderr, flush=True)
@@ -776,7 +776,7 @@ class AudioEngine:
             if tts_active and not barge_in_triggered:
                 # Wait for TTS echo/reverb to decay, then flush contaminated frames
                 # With AEC active we need less flush time
-                flush_delay = 0.5 if self.aec is not None else 1.5
+                flush_delay = 1.0 if self.aec is not None else 2.5
                 await asyncio.sleep(flush_delay)
                 while not audio_queue.empty():
                     audio_queue.get_nowait()
@@ -787,6 +787,9 @@ class AudioEngine:
 
             frame_count = 0
             send_failed = False
+            energy_gate = 150  # Min RMS to send real audio (below = silence substitute)
+            cooldown_gate = energy_gate * 3  # Stricter gate right after TTS
+            cooldown_end = time.monotonic() + 2.0 if tts_active else 0  # 2s post-TTS cooldown
             try:
                 while not done_event.is_set() and not send_failed:
                     try:
@@ -802,6 +805,12 @@ class AudioEngine:
                                     data = data.reshape(-1, 1)
                                 except Exception:
                                     pass
+                        # Energy gate: suppress low-energy frames (reverb/noise) to prevent WLK hallucinations
+                        frame_rms = float(np.sqrt(np.mean(data.astype(np.float64) ** 2)))
+                        now = time.monotonic()
+                        gate = cooldown_gate if now < cooldown_end else energy_gate
+                        if frame_rms < gate:
+                            data = np.zeros_like(data)  # Send silence to keep WLK timing
                         # Resilience: wrap send in exception handler and add rate limiting
                         try:
                             await ws.send(data.tobytes())
