@@ -586,13 +586,28 @@ class AudioEngine:
                     return "(wlk_error)"
                 await asyncio.sleep(1.0)
 
-        try:
-            ws = await asyncio.wait_for(
-                websockets.connect(self.wlk_url), timeout=10.0
-            )
-            print(f"[WLK] websocket connected", file=sys.stderr, flush=True)
-        except (asyncio.TimeoutError, OSError) as e:
-            print(f"[WLK] websocket connect failed: {e}", file=sys.stderr, flush=True)
+        # Resilience: retry connection with exponential backoff
+        ws = None
+        max_retries = 3
+        for retry in range(max_retries):
+            try:
+                retry_timeout = min(5.0 * (2 ** retry), 15.0)  # 5s, 10s, 15s
+                ws = await asyncio.wait_for(
+                    websockets.connect(self.wlk_url), timeout=retry_timeout
+                )
+                print(f"[WLK] websocket connected", file=sys.stderr, flush=True)
+                break
+            except (asyncio.TimeoutError, OSError) as e:
+                if retry < max_retries - 1:
+                    backoff = 0.5 * (2 ** retry)  # 0.5s, 1s, 2s
+                    print(f"[WLK] websocket connect attempt {retry + 1}/{max_retries} failed: {e}, retrying in {backoff}s", file=sys.stderr, flush=True)
+                    await asyncio.sleep(backoff)
+                else:
+                    print(f"[WLK] websocket connect failed after {max_retries} attempts: {e}", file=sys.stderr, flush=True)
+                    return "(wlk_error)"
+
+        if ws is None:
+            print(f"[WLK] websocket connection failed, no valid connection established", file=sys.stderr, flush=True)
             return "(wlk_error)"
 
         text_result = ""
@@ -771,8 +786,9 @@ class AudioEngine:
                 mic_stream.start()
 
             frame_count = 0
+            send_failed = False
             try:
-                while not done_event.is_set():
+                while not done_event.is_set() and not send_failed:
                     try:
                         data = await asyncio.wait_for(audio_queue.get(), timeout=0.5)
                         # Apply AEC to clean residual echo from mic frames
@@ -786,10 +802,23 @@ class AudioEngine:
                                     data = data.reshape(-1, 1)
                                 except Exception:
                                     pass
-                        await ws.send(data.tobytes())
-                        frame_count += 1
-                        if frame_count % 10 == 0:
-                            print(f"[DEBUG] Sent {frame_count} frames to WLK", file=sys.stderr, flush=True)
+                        # Resilience: wrap send in exception handler and add rate limiting
+                        try:
+                            await ws.send(data.tobytes())
+                            frame_count += 1
+                            # Rate limiting: prevent overwhelming WLK with rapid frame bursts
+                            if frame_count % 50 == 0:
+                                await asyncio.sleep(0.01)
+                            if frame_count % 10 == 0:
+                                print(f"[DEBUG] Sent {frame_count} frames to WLK", file=sys.stderr, flush=True)
+                        except websockets.exceptions.ConnectionClosed as e:
+                            print(f"[WLK] send failed, connection closed: code={e.code} reason='{e.reason}'", file=sys.stderr, flush=True)
+                            send_failed = True
+                            done_event.set()
+                        except Exception as e:
+                            print(f"[WLK] send failed with unexpected error: {e}", file=sys.stderr, flush=True)
+                            send_failed = True
+                            done_event.set()
                     except asyncio.TimeoutError:
                         continue
             finally:
@@ -809,8 +838,9 @@ class AudioEngine:
                     idle_since = time.monotonic()
                     msg_count += 1
                 except asyncio.TimeoutError:
-                    if time.monotonic() - idle_since > 10.0:
-                        print("[WLK] unresponsive for 10s, ending capture", file=sys.stderr, flush=True)
+                    # Resilience: reduced timeout from 10s to 3s for faster failure detection
+                    if time.monotonic() - idle_since > 3.0:
+                        print("[WLK] unresponsive for 3s, ending capture", file=sys.stderr, flush=True)
                         done_event.set()
                         return
                     continue
