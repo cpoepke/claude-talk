@@ -33,13 +33,20 @@ class SessionStore:
         except Exception:
             pass
 
-    def claim(self, session_id: str, personality: str = "unknown", voice: str | None = None) -> None:
+    def claim(self, session_id: str, personality: str = "unknown", voice: str | None = None, is_primary: bool = False) -> None:
         now = datetime.now(timezone.utc).isoformat()
+
+        # If no primary session exists, make this one primary
+        if not is_primary:
+            primary = self.get_primary()
+            is_primary = primary is None
+
         self.db.execute(
-            "INSERT INTO sessions (session_id, status, personality, voice, started_at, updated_at) "
-            "VALUES (?, 'active', ?, ?, ?, ?) "
-            "ON CONFLICT(session_id) DO UPDATE SET status='active', personality=?, voice=?, started_at=?, updated_at=?",
-            (session_id, personality, voice, now, now, personality, voice, now, now),
+            "INSERT INTO sessions (session_id, status, personality, voice, is_primary, started_at, updated_at) "
+            "VALUES (?, 'active', ?, ?, ?, ?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET status='active', personality=?, voice=?, is_primary=?, started_at=?, updated_at=?",
+            (session_id, personality, voice, 1 if is_primary else 0, now, now,
+             personality, voice, 1 if is_primary else 0, now, now),
         )
         self.db.commit()
 
@@ -110,3 +117,22 @@ class SessionStore:
         if row:
             return {"personality": row["personality"], "voice": row["voice"]}
         return None
+
+    def get_primary(self) -> str | None:
+        """Get the primary session ID."""
+        row = self.db.execute(
+            "SELECT session_id FROM sessions WHERE is_primary=1 AND status='active' LIMIT 1"
+        ).fetchone()
+        return row["session_id"] if row else None
+
+    def set_primary(self, session_id: str) -> None:
+        """Set a session as primary (clears other primary flags)."""
+        now = datetime.now(timezone.utc).isoformat()
+        # Clear all primary flags
+        self.db.execute("UPDATE sessions SET is_primary=0")
+        # Set this one as primary
+        self.db.execute(
+            "UPDATE sessions SET is_primary=1, updated_at=? WHERE session_id=?",
+            (now, session_id),
+        )
+        self.db.commit()

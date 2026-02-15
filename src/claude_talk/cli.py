@@ -359,3 +359,77 @@ def hook_stop():
     """Stop hook: speak response, capture user speech, inject into conversation."""
     from .hooks.voice_stop import run
     run()
+
+
+# ── Channel commands ─────────────────────────────────────────────────────────
+
+
+@cli.group()
+def channel():
+    """Channel and message management."""
+
+
+@channel.command("send")
+@click.argument("session_id")
+@click.argument("text")
+@click.option("--from-session", default=None, help="Sender session ID")
+def channel_send(session_id, text, from_session):
+    """Send a message to a session's channel."""
+    from .channels import ChannelManager
+    from .db import DB
+
+    manager = ChannelManager(DB())
+    channel_id = manager.get_or_create_channel(session_id)
+    message_id = manager.send_message(channel_id, text, "direct", from_session)
+    click.echo(f"Message {message_id} sent to channel {channel_id}", err=True)
+
+
+@channel.command("broadcast")
+@click.argument("text")
+@click.option("--from-session", default=None, help="Sender session ID")
+def channel_broadcast(text, from_session):
+    """Broadcast a message to all active sessions."""
+    from .channels import ChannelManager
+    from .db import DB
+
+    manager = ChannelManager(DB())
+    manager.broadcast(text, "broadcast", from_session)
+    click.echo("Message broadcast to all sessions", err=True)
+
+
+@channel.command("poll")
+@click.argument("session_id")
+def channel_poll(session_id):
+    """Poll for unread messages in a session's channel."""
+    from .channels import ChannelManager
+    from .db import DB
+
+    manager = ChannelManager(DB())
+    channel_id = manager.get_or_create_channel(session_id)
+    messages = manager.get_unread_messages(channel_id)
+
+    if messages:
+        click.echo(json.dumps(messages))
+        # Mark all as read
+        for msg in messages:
+            manager.mark_read(msg["message_id"])
+    else:
+        sys.exit(1)  # No messages
+
+
+@channel.command("route")
+@click.argument("text")
+def channel_route(text):
+    """Parse text and determine routing (for testing)."""
+    from .routing import parse_route, get_target_sessions
+
+    route_type, target_session_id, cleaned_text = parse_route(text)
+    target_sessions = get_target_sessions(route_type, target_session_id)
+
+    result = {
+        "route_type": route_type,
+        "target_session_id": target_session_id,
+        "cleaned_text": cleaned_text,
+        "target_sessions": target_sessions,
+    }
+    click.echo(json.dumps(result, indent=2))

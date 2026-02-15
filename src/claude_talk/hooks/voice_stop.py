@@ -15,8 +15,10 @@ import sys
 import urllib.request
 from pathlib import Path
 
+from ..channels import ChannelManager
 from ..config import Config
 from ..db import DB
+from ..routing import get_target_sessions, parse_route
 from ..session import SessionStore
 
 
@@ -31,10 +33,25 @@ def run():
         sys.exit(0)
 
     # Check if this session is active (claims it if old state file says active)
-    store = SessionStore(DB())
+    db = DB()
+    store = SessionStore(db)
     if not store.check_or_claim(session_id):
         # Not our session — exit silently
         sys.exit(0)
+
+    # Poll for messages in this session's channel FIRST
+    # If there are messages from other sessions, inject them instead of speaking
+    manager = ChannelManager(db)
+    channel_id = manager.get_or_create_channel(session_id)
+    messages = manager.get_unread_messages(channel_id)
+
+    if messages:
+        # We have incoming messages - inject the first one and mark as read
+        msg = messages[0]
+        manager.mark_read(msg["message_id"])
+        route_label = f"[{msg['route_type']}] " if msg['route_type'] == 'broadcast' else ""
+        _output_decision("block", f"{route_label}Message from another session: {msg['text']}")
+        return
 
     # Load session's personality and update audio server voice if needed
     config = Config()
@@ -138,8 +155,25 @@ def run():
     except Exception:
         pass
 
-    # Block stopping and inject user's speech
-    _output_decision("block", f"The user said aloud: {text}")
+    # Parse routing from transcription
+    route_type, target_session_id, cleaned_text = parse_route(text)
+    target_sessions = get_target_sessions(route_type, target_session_id)
+
+    # Route message to target sessions (reuse db and manager from above)
+
+    for target_sid in target_sessions:
+        if target_sid == session_id:
+            # Message for this session - inject directly
+            _output_decision("block", f"The user said aloud: {cleaned_text}")
+            return
+        else:
+            # Message for another session - send to their channel
+            channel_id = manager.get_or_create_channel(target_sid)
+            manager.send_message(channel_id, cleaned_text, route_type, from_session_id=None)
+
+    # If no targets (shouldn't happen), inject to this session as fallback
+    if not target_sessions:
+        _output_decision("block", f"The user said aloud: {text}")
 
 
 def _extract_last_assistant_message(transcript_path: Path) -> str:
