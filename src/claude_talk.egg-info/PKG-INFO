@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: claude-talk
+Version: 0.3.0
+Summary: Voice conversation plugin for Claude Code
+Requires-Python: >=3.11
+License-File: LICENSE
+Requires-Dist: click>=8.0
+Requires-Dist: fastapi
+Requires-Dist: uvicorn
+Requires-Dist: sounddevice
+Requires-Dist: numpy
+Requires-Dist: websockets
+Requires-Dist: pydantic
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Dynamic: license-file

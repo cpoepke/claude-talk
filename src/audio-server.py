@@ -1057,6 +1057,12 @@ class SpeakRequest(BaseModel):
     text: str
 
 
+class QueueSpeakRequest(BaseModel):
+    text: str
+    voice: str
+    session_id: str
+
+
 class StatusResponse(BaseModel):
     state: str
     muted: bool
@@ -1083,10 +1089,67 @@ event_logger = EventLogger(log_file)
 audio_engine = AudioEngine(config, state, event_logger)
 wlk_manager = WLKManager(config)
 
+# Message queue for multi-session voice handling
+message_queue: asyncio.Queue = asyncio.Queue()
+queue_processor_task = None
+
+
+async def process_message_queue():
+    """Background task that processes queued TTS messages sequentially."""
+    global message_queue
+    event_logger.log_event("QUEUE_PROCESSOR_START")
+
+    while True:
+        try:
+            # Get next message from queue (blocks until available)
+            msg = await message_queue.get()
+
+            if msg is None:  # Shutdown signal
+                event_logger.log_event("QUEUE_PROCESSOR_STOP")
+                break
+
+            text, voice, session_id = msg["text"], msg["voice"], msg["session_id"]
+            event_logger.log_event("QUEUE_PROCESS_START", {
+                "session_id": session_id,
+                "voice": voice,
+                "text": text[:50]
+            })
+
+            # Set voice for this message
+            original_voice = audio_engine.voice
+            audio_engine.voice = voice
+
+            # Speak and listen with barge-in
+            try:
+                response = await audio_engine.speak_and_listen(text)
+                event_logger.log_event("QUEUE_PROCESS_END", {
+                    "session_id": session_id,
+                    "response": response[:50] if response else ""
+                })
+
+                # Store response for the session to retrieve
+                # For now, we'll add it to state with session prefix
+                state.set(**{f"RESPONSE_{session_id}": response})
+
+            finally:
+                # Restore original voice
+                audio_engine.voice = original_voice
+
+            message_queue.task_done()
+
+        except asyncio.CancelledError:
+            event_logger.log_event("QUEUE_PROCESSOR_CANCELLED")
+            break
+        except Exception as e:
+            event_logger.log_event("QUEUE_PROCESSOR_ERROR", {"error": str(e)})
+            message_queue.task_done()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown"""
+    global queue_processor_task
+
     state.set(SESSION="active", STATUS="idle", MUTED="false")
     await wlk_manager.start()
     # Wait for WLK to be ready
@@ -1102,7 +1165,21 @@ async def lifespan(app: FastAPI):
             break
         except (asyncio.TimeoutError, OSError):
             await asyncio.sleep(1)
+
+    # Start message queue processor
+    queue_processor_task = asyncio.create_task(process_message_queue())
+    print("Message queue processor started")
+
     yield
+
+    # Stop queue processor
+    if queue_processor_task:
+        await message_queue.put(None)  # Shutdown signal
+        try:
+            await asyncio.wait_for(queue_processor_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            queue_processor_task.cancel()
+
     await wlk_manager.stop()
     state.set(SESSION="stopped")
 
@@ -1160,6 +1237,46 @@ async def speak(req: SpeakRequest) -> TextResponse:
     text = await audio_engine.speak_and_listen(req.text)
     event_logger.log_event("API_SPEAK_END", {"text": text})
     return TextResponse(text=text)
+
+
+@app.post("/queue-speak")
+async def queue_speak(req: QueueSpeakRequest) -> dict[str, str]:
+    """Queue a TTS message with specific voice for sequential playback"""
+    event_logger.log_event("API_QUEUE_SPEAK", {
+        "session_id": req.session_id,
+        "voice": req.voice,
+        "text": req.text[:50]
+    })
+    await message_queue.put({
+        "text": req.text,
+        "voice": req.voice,
+        "session_id": req.session_id
+    })
+    return {"status": "queued", "queue_size": message_queue.qsize()}
+
+
+@app.get("/queue-response/{session_id}")
+async def get_queue_response(session_id: str) -> TextResponse:
+    """Get and clear the response for a session (blocks until available)"""
+    # Poll for response with timeout
+    key = f"RESPONSE_{session_id}"
+    for _ in range(3600):  # 1 hour timeout (1 second intervals)
+        response = state.get(key)
+        if response is not None:
+            # Clear the response
+            state.set(**{key: None})
+            return TextResponse(text=response)
+        await asyncio.sleep(1)
+    return TextResponse(text="(timeout)")
+
+
+@app.get("/queue-status")
+async def get_queue_status() -> dict:
+    """Get current message queue status"""
+    return {
+        "queue_size": message_queue.qsize(),
+        "processor_running": queue_processor_task is not None and not queue_processor_task.done()
+    }
 
 
 @app.get("/devices")

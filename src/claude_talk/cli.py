@@ -144,6 +144,58 @@ def speak(text, timeout):
         sys.exit(1)
 
 
+@server.command("queue-speak")
+@click.argument("text")
+@click.argument("session_id")
+@click.option("--timeout", default=3600, help="Request timeout in seconds for response")
+def queue_speak(text, session_id, timeout):
+    """Queue TTS message with session's voice, then wait for response."""
+    from .db import DB
+    from .session import SessionStore
+
+    config = Config()
+    port = config.get_int("AUDIO_SERVER_PORT", 8150)
+
+    # Get session's voice from database
+    store = SessionStore(DB())
+    session_info = store.get_personality(session_id)
+    if not session_info:
+        click.echo(f"Error: Session {session_id} not found", err=True)
+        sys.exit(1)
+
+    voice = session_info.get("voice") or config.get("VOICE", "Daniel")
+
+    try:
+        import urllib.request
+
+        # Queue the message
+        req = urllib.request.Request(
+            f"http://localhost:{port}/queue-speak",
+            data=json.dumps({
+                "text": text,
+                "voice": voice,
+                "session_id": session_id
+            }).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        response = urllib.request.urlopen(req, timeout=5)
+        queue_result = json.loads(response.read())
+        click.echo(f"Queued (position: {queue_result.get('queue_size', '?')})", err=True)
+
+        # Wait for response
+        response = urllib.request.urlopen(
+            f"http://localhost:{port}/queue-response/{session_id}",
+            timeout=timeout
+        )
+        result = json.loads(response.read())
+        click.echo(json.dumps(result))
+
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 @server.command("listen")
 @click.option("--timeout", default=3600, help="Request timeout in seconds")
 def listen(timeout):

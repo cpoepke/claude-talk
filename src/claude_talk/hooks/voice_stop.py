@@ -53,12 +53,6 @@ def run():
         _output_decision("block", f"{route_label}Message from another session: {msg['text']}")
         return
 
-    # Load session's personality and update audio server voice if needed
-    session_info = store.get_personality(session_id)
-    if session_info and session_info.get("voice"):
-        voice = session_info["voice"]
-        _run_cli(["server", "set-voice", voice])
-
     # Extract last assistant text from transcript JSONL
     transcript_path = Path(hook_input.get("transcript_path", ""))
     if not transcript_path.exists():
@@ -68,8 +62,9 @@ def run():
     if not last_msg:
         sys.exit(0)
 
-    # Speak response and capture next utterance
-    result = _run_cli(["server", "speak", last_msg, "--timeout", "3600"])
+    # Queue message with session's voice (handled by queue-speak command)
+    # The queue processor will set the voice, speak, and listen
+    result = _run_cli(["server", "queue-speak", last_msg, session_id, "--timeout", "3600"])
     if not result:
         _output_decision("block", "Audio server not responding. The voice session may have crashed. Ask the user what to do.")
         return

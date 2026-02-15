@@ -39,7 +39,7 @@ if [[ -f "$STATE_FILE" ]]; then
     SESSION=$(grep "^SESSION=" "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo "")
     if [[ "$SESSION" == "active" ]]; then
         # Get active personality display name (with emoji) and color
-        PERSONALITY_JSON=$(source "$HOME/.claude-talk/venvs/wlk/bin/activate" && claude-talk personality display --json 2>/dev/null || echo "")
+        PERSONALITY_JSON=$(source "$HOME/.claude-talk/venvs/wlk/bin/activate" && claude-talk personality display "$SESSION_ID" --json 2>/dev/null || echo "")
         if [[ -n "$PERSONALITY_JSON" ]]; then
             ACTIVE_PERSONALITY=$(echo "$PERSONALITY_JSON" | jq -r '.display_name // empty' 2>/dev/null || echo "")
             PERSONALITY_COLOR=$(echo "$PERSONALITY_JSON" | jq -r '.color // "95"' 2>/dev/null || echo "95")
