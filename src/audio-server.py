@@ -273,7 +273,7 @@ class WLKManager:
         """Auto-restart loop for WLK"""
         wlk_bin = self.venv_path / "bin/wlk"
         while not self.stop_requested:
-            print(f"Starting WLK on port {self.port}...")
+            print(f"[WLK] starting on port {self.port}...", file=sys.stderr, flush=True)
             self.process = subprocess.Popen(
                 [
                     str(wlk_bin),
@@ -288,7 +288,7 @@ class WLKManager:
                     "--pcm-input",
                 ],
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
 
             # Wait for process to exit
@@ -301,10 +301,23 @@ class WLKManager:
                         self.process.kill()
                     return
 
+            # Drain stderr for crash diagnostics
+            exit_code = self.process.returncode if self.process else None
+            print(f"[WLK] process exited with code {exit_code} at {time.strftime('%Y-%m-%d %H:%M:%S')}", file=sys.stderr, flush=True)
+            if self.process and self.process.stderr:
+                try:
+                    err = self.process.stderr.read().decode(errors="replace")
+                    if err.strip():
+                        print(f"[WLK] stderr output (last 20 lines):", file=sys.stderr, flush=True)
+                        for line in err.strip().splitlines()[-20:]:
+                            print(f"[WLK]   {line}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"[WLK] failed to read stderr: {e}", file=sys.stderr, flush=True)
+
             if self.stop_requested:
                 return
 
-            print(f"WLK crashed at {time.strftime('%Y-%m-%d %H:%M:%S')}. Restarting in 2s...")
+            print(f"[WLK] restarting in 2s...", file=sys.stderr, flush=True)
             await asyncio.sleep(2)
 
     async def _is_running(self) -> bool:
@@ -395,6 +408,15 @@ class AudioEngine:
         self.mic_stream: sd.InputStream | None = None
         self.ref_stream: sd.InputStream | None = None
         self.lock = asyncio.Lock()  # Serialize capture operations
+
+        # Acoustic Echo Cancellation (Speex)
+        self.aec = None
+        if self.barge_in_enabled and self.blackhole_device is not None:
+            try:
+                self.aec = SpeexAEC(frame_size=1600, filter_length=4800, sample_rate=16000)
+                print(f"  Speex AEC: enabled (frame=1600, filter=4800)")
+            except Exception as e:
+                print(f"  Speex AEC: unavailable ({e})", file=sys.stderr)
 
         # Buffered listen: pre-captured text from /queue-listen
         self._buffered_text: str | None = None
@@ -545,13 +567,33 @@ class AudioEngine:
         """
         Core capture logic: streams mic to WLK, handles barge-in, returns text.
         """
+        # Health check: wait for WLK to be ready before connecting
+        wlk_port = self.config.get_int("WLK_PORT", 8090)
+        for attempt in range(10):
+            try:
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection("localhost", wlk_port), timeout=2.0
+                )
+                writer.close()
+                await writer.wait_closed()
+                if attempt > 0:
+                    print(f"[WLK] ready after {attempt + 1} attempts", file=sys.stderr, flush=True)
+                break
+            except (asyncio.TimeoutError, OSError) as e:
+                print(f"[WLK] health check attempt {attempt + 1}/10 failed: {e}", file=sys.stderr, flush=True)
+                if attempt == 9:
+                    print(f"[WLK] not reachable after 10 attempts, giving up", file=sys.stderr, flush=True)
+                    return "(wlk_error)"
+                await asyncio.sleep(1.0)
+
         try:
             ws = await asyncio.wait_for(
                 websockets.connect(self.wlk_url), timeout=10.0
             )
+            print(f"[WLK] websocket connected", file=sys.stderr, flush=True)
         except (asyncio.TimeoutError, OSError) as e:
-            print(f"Failed to connect to WLK: {e}", file=sys.stderr)
-            return ""
+            print(f"[WLK] websocket connect failed: {e}", file=sys.stderr, flush=True)
+            return "(wlk_error)"
 
         text_result = ""
         last_text_change = 0.0
@@ -646,13 +688,22 @@ class AudioEngine:
                 mic_frame = None
                 while not audio_queue.empty():
                     mic_frame = audio_queue.get_nowait()
-                # Drain ref queue (not needed for detection, just keeping it clear)
-                while not ref_queue.empty():
-                    ref_queue.get_nowait()
 
                 if mic_frame is None:
                     await asyncio.sleep(0.05)
                     continue
+
+                # Apply AEC if available: cancel TTS echo from mic signal
+                if self.aec is not None:
+                    ref_frame = None
+                    while not ref_queue.empty():
+                        ref_frame = ref_queue.get_nowait()
+                    if ref_frame is not None:
+                        try:
+                            mic_frame = self.aec.cancel(mic_frame.flatten(), ref_frame.flatten())
+                            mic_frame = mic_frame.reshape(-1, 1)
+                        except Exception:
+                            pass
 
                 buffered_mic_frames.append(mic_frame)
                 mic_rms = float(np.sqrt(np.mean(mic_frame.astype(np.float64) ** 2)))
@@ -663,20 +714,26 @@ class AudioEngine:
                     baseline_rms.append(mic_rms)
                     if frame_count == CALIBRATION_FRAMES:
                         baseline = sum(baseline_rms) / len(baseline_rms)
-                        # Threshold: 2x baseline (speech on top of TTS bleed), min 800
-                        threshold = max(baseline * 2.0, 800)
+                        # With AEC: residual is low (~50-180), speech adds ~200-500 on top
+                        # Without AEC: raw bleed is high (~300-800), speech adds ~500-1000
+                        if self.aec is not None:
+                            threshold = max(baseline * 3.0, 400)
+                        else:
+                            threshold = max(baseline * 2.5, 1200)
                         print(f"[BARGE-IN] calibrated: baseline={baseline:.0f} threshold={threshold:.0f}", file=sys.stderr, flush=True)
                     await asyncio.sleep(0.05)
                     continue
 
-                # Detection
+                # Detection — log every 5th frame for tuning visibility
+                if frame_count % 5 == 0:
+                    print(f"[BARGE-IN] rms={mic_rms:.0f} thr={threshold:.0f} spk={spike_count}", file=sys.stderr, flush=True)
                 if mic_rms > threshold:
                     spike_count += 1
                     print(f"[BARGE-IN] spike! mic_rms={mic_rms:.0f} threshold={threshold:.0f} spikes={spike_count}", file=sys.stderr, flush=True)
                 else:
                     spike_count = max(0, spike_count - 1)
 
-                if spike_count >= 3:
+                if spike_count >= 4:
                     self.logger.log_event("BARGE_IN_DETECTED", {"mic_rms": mic_rms})
                     print(f"BARGE-IN! mic_rms={mic_rms:.0f} (buffered {len(buffered_mic_frames)} frames for replay)", file=sys.stderr)
                     barge_in_triggered = True
@@ -702,14 +759,14 @@ class AudioEngine:
             self.logger.log_event("CAPTURE_START")
             print(f"[DEBUG] TTS done, starting audio send", file=sys.stderr, flush=True)
             if tts_active and not barge_in_triggered:
-                # Wait for TTS echo/reverb to fully decay, then flush contaminated frames
-                await asyncio.sleep(1.5)
+                # Wait for TTS echo/reverb to decay, then flush contaminated frames
+                # With AEC active we need less flush time
+                flush_delay = 0.5 if self.aec is not None else 1.5
+                await asyncio.sleep(flush_delay)
                 while not audio_queue.empty():
                     audio_queue.get_nowait()
-                # Second flush after a short gap to catch stragglers
-                await asyncio.sleep(0.3)
-                while not audio_queue.empty():
-                    audio_queue.get_nowait()
+                while not ref_queue.empty():
+                    ref_queue.get_nowait()
             if not barge_in_enabled:
                 mic_stream.start()
 
@@ -718,6 +775,17 @@ class AudioEngine:
                 while not done_event.is_set():
                     try:
                         data = await asyncio.wait_for(audio_queue.get(), timeout=0.5)
+                        # Apply AEC to clean residual echo from mic frames
+                        if self.aec is not None and not ref_queue.empty():
+                            ref_frame = None
+                            while not ref_queue.empty():
+                                ref_frame = ref_queue.get_nowait()
+                            if ref_frame is not None:
+                                try:
+                                    data = self.aec.cancel(data.flatten(), ref_frame.flatten())
+                                    data = data.reshape(-1, 1)
+                                except Exception:
+                                    pass
                         await ws.send(data.tobytes())
                         frame_count += 1
                         if frame_count % 10 == 0:
@@ -741,13 +809,15 @@ class AudioEngine:
                     idle_since = time.monotonic()
                     msg_count += 1
                 except asyncio.TimeoutError:
-                    if time.monotonic() - idle_since > 30.0:
-                        print("[DEBUG] WLK unresponsive for 30s", file=sys.stderr, flush=True)
+                    if time.monotonic() - idle_since > 10.0:
+                        print("[WLK] unresponsive for 10s, ending capture", file=sys.stderr, flush=True)
                         done_event.set()
                         return
                     continue
-                except websockets.exceptions.ConnectionClosed:
-                    print("[DEBUG] WLK connection closed", file=sys.stderr, flush=True)
+                except websockets.exceptions.ConnectionClosed as e:
+                    print(f"[WLK] connection closed during recv: code={e.code} reason='{e.reason}'", file=sys.stderr, flush=True)
+                    if got_text and text_result:
+                        print(f"[WLK] preserving partial transcription: '{text_result}'", file=sys.stderr, flush=True)
                     done_event.set()
                     return
 
@@ -756,9 +826,9 @@ class AudioEngine:
                 buffer_text = d.get("buffer_transcription", "").strip()
                 combined = (lines_text + " " + buffer_text).strip()
 
-                # Filter hallucinations
-                for noise in ["[Music]", "[INAUDIBLE]", "[BLANK_AUDIO]"]:
-                    combined = combined.replace(noise, "")
+                # Filter hallucinations (exact and partial matches)
+                import re
+                combined = re.sub(r'\[(?:Music|INAUDIBLE|BLANK_AUDIO|BLANK[^\]]*)\]?', '', combined, flags=re.IGNORECASE)
                 combined = combined.strip()
 
                 if combined and combined != text_result:
@@ -867,6 +937,15 @@ class AudioEngine:
                 return remaining
             else:
                 print(f"[ECHO-FILTER] entire transcription was TTS echo", file=sys.stderr, flush=True)
+                return "(silence)"
+
+        # Fuzzy check: if >50% of transcription words appear in TTS text, likely echo
+        if len(trans_words) >= 4:
+            tts_word_set = set(w.rstrip(".,!?;:-—'\"") for w in tts_words)
+            match_count = sum(1 for w in trans_words if w.rstrip(".,!?;:-—'\"") in tts_word_set)
+            match_ratio = match_count / len(trans_words)
+            if match_ratio > 0.5:
+                print(f"[ECHO-FILTER] fuzzy match {match_ratio:.0%} ({match_count}/{len(trans_words)} words), treating as echo", file=sys.stderr, flush=True)
                 return "(silence)"
 
         return transcription
