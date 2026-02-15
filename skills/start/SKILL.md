@@ -10,20 +10,7 @@ Launch a real-time voice conversation. You will hear Claude speak and can respon
 
 ## Steps
 
-### 1. Load Configuration
-
-Get CLAUDE_TALK_DIR (use Bash):
-```bash
-if [ -d scripts/lib ]; then
-  echo "$(pwd)"
-else
-  grep CLAUDE_TALK_DIR ~/.claude-talk/config.env 2>/dev/null | cut -d= -f2 | tr -d '"'
-fi
-```
-
-(Config loading is now handled by the individual scripts.)
-
-### 2. Load Personality
+### 1. Load Personality
 
 **Migration check:** If `~/.claude-talk/personality.md` exists but `~/.claude-talk/personalities/` does NOT:
 1. Create `~/.claude-talk/personalities/`.
@@ -46,25 +33,24 @@ fi
 
 Keep the full personality.md content in your context for the duration of this voice chat session.
 
-### 3. Start Audio Server
-
-The audio server handles all audio operations (TTS, capture, barge-in, WLK).
+### 2. Start Audio Server
 
 Start the audio server and wait for readiness (use Bash):
 ```bash
-bash "$CLAUDE_TALK_DIR/scripts/lib/start-audio-server.sh"
+claude-talk server start
 ```
 
 If it fails, tell the user and abort.
 
-### 5. Activate Voice Session
+### 3. Activate Voice Session
 
-Set the voice session state so the Stop hook knows to activate (use Bash):
+Claim the voice session (use Bash):
 ```bash
-bash "$CLAUDE_TALK_DIR/scripts/lib/set-session-state.sh" active
+claude-talk session claim "$SESSION_ID" 2>/dev/null || true
+claude-talk state set SESSION active
 ```
 
-### 6. Greet the User
+### 4. Greet the User
 
 Craft a personalized greeting that:
 - Uses your personality name and conversational style from personality.md
@@ -78,7 +64,7 @@ Examples (adapt to your personality style):
 
 Just output this greeting as plain text in your response. Do NOT call the audio server directly — the Stop hook will automatically speak it aloud via `/speak` (which includes TTS + barge-in + capture) and inject the user's first utterance back into the conversation. You don't need to do anything else — just respond naturally.
 
-### 7. Conversational Mode
+### 5. Conversational Mode
 
 While voice chat is active, respond conversationally. The Stop hook captures user speech and injects it as the reason in a "block" decision, appearing as "The user said aloud: ..." in your context.
 

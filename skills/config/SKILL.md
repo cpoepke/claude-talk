@@ -28,14 +28,9 @@ If it returns JSON, display:
 - **Output device**: name and index
 - **Barge-in**: enabled/disabled, BlackHole device index if available
 
-Also show audio devices and active input/output. Get CLAUDE_TALK_DIR first, then run:
+Also show audio devices (use Bash):
 ```bash
-if [ -d scripts/lib ]; then
-  CLAUDE_TALK_DIR="$(pwd)"
-else
-  CLAUDE_TALK_DIR=$(grep CLAUDE_TALK_DIR ~/.claude-talk/config.env 2>/dev/null | cut -d= -f2 | tr -d '"')
-fi
-bash "$CLAUDE_TALK_DIR/scripts/lib/get-audio-devices.sh"
+claude-talk devices
 ```
 
 Show the active AUDIO_DEVICE setting and what it resolves to (if "auto" or unset, note that auto-detection is active).

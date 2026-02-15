@@ -63,14 +63,9 @@ Walk the user through creating a personality using AskUserQuestion. Reuse the sa
 
 #### Step 1: Voice
 
-Check which Enhanced/Premium voices are installed (get plugin dir first, then use Bash):
+Check which Enhanced/Premium voices are installed (use Bash):
 ```bash
-if [ -d scripts/lib ]; then
-  PLUGIN_DIR="$(pwd)"
-else
-  PLUGIN_DIR=$(grep CLAUDE_TALK_DIR ~/.claude-talk/config.env 2>/dev/null | cut -d= -f2 | tr -d '"')
-fi
-bash "$PLUGIN_DIR/scripts/lib/check-enhanced-voices.sh"
+claude-talk voices --enhanced
 ```
 
 Play voice previews and use AskUserQuestion with header "Voice" to let the user pick. Follow the same voice selection logic as install SKILL.md Question 1 (recommend Enhanced voices, play samples, etc.).

@@ -18,14 +18,28 @@ All processing is local except the Claude API call.
 - `/claude-talk:personality` - Manage personalities (list, create, switch, edit, delete, export, import)
 - `/claude-talk:help` - Show help
 
+## CLI
+
+`claude-talk` binary (installed via `pip install -e .` into WLK venv):
+- `claude-talk server start|stop|status` - Audio server lifecycle
+- `claude-talk session claim|release|is-active|list|active` - Session management (SQLite-backed)
+- `claude-talk config [KEY=VALUE]` - View/set config
+- `claude-talk devices` - List audio devices
+- `claude-talk voices [--enhanced]` - List macOS TTS voices
+- `claude-talk personality list|switch|active` - Personality management
+- `claude-talk state set KEY VALUE` - Set session state (legacy compat)
+
 ## Key paths
 
+- `src/claude_talk/` - Python package (config, db, session, personality, devices, voices, cli)
 - `src/audio-server.py` - Audio server (TTS, capture, barge-in, WLK)
 - `.claude/hooks/voice-stop.sh` - Stop hook (voice conversation loop)
 - `config/defaults.env` - Default configuration
 - `~/.claude-talk/config.env` - User overrides (created by install)
+- `~/.claude-talk/claude-talk.db` - SQLite database (sessions, future: channels/messages)
 - `~/.claude-talk/personality.md` - Active personality (created by install)
 - `~/.claude-talk/personalities/` - Saved personalities directory (includes 9 defaults)
 - `~/.claude-talk/active-personality` - Name of active personality
 - `~/.claude-talk/venvs/` - Python virtual environments
 - `personalities/` - Default personality templates (copied during install)
+- `tests/` - Unit tests (`pytest tests/`)

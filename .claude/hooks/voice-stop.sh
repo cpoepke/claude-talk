@@ -10,11 +10,15 @@
 
 INPUT=$(cat)
 
-# Only run if voice session is active
-SESSION=$(grep "^SESSION=" "$HOME/.claude-talk/state" 2>/dev/null | cut -d= -f2)
-if [[ "$SESSION" != "active" ]]; then
-  # Ensure audio server is stopped when session ends
-  curl -s -X POST http://localhost:8150/stop >/dev/null 2>&1
+# Extract session ID from hook input
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty')
+if [[ -z "$SESSION_ID" ]]; then
+  exit 0
+fi
+
+# Check if THIS session is the active voice session
+if ! claude-talk session is-active "$SESSION_ID" 2>/dev/null; then
+  # Not our session — exit silently
   exit 0
 fi
 

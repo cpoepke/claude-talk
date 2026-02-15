@@ -47,12 +47,17 @@ Otherwise:
    ```
    If `$ARGUMENTS` contains `--force`, add `--force` flag to recreate venvs.
 
-3. Report install results briefly:
+3. Install the claude-talk CLI into the WLK venv (use Bash):
+   ```bash
+   source ~/.claude-talk/venvs/wlk/bin/activate && pip install -e <plugin-dir>
+   ```
+
+4. Report install results briefly:
    - Whether dependencies installed successfully
    - The detected audio devices, highlighting which mic auto-detection would pick (the audio server uses auto-detection by default — no need to configure AUDIO_DEVICE unless the wrong mic is selected)
    - That the Claude Code statusline was configured with a voice state indicator
 
-4. **Barge-in setup (optional but recommended)**: Check if BlackHole 2ch is installed by looking for it in the audio device list. If not found, tell the user:
+5. **Barge-in setup (optional but recommended)**: Check if BlackHole 2ch is installed by looking for it in the audio device list. If not found, tell the user:
 
    "For barge-in support (interrupt TTS by speaking), you can optionally set up BlackHole:"
    1. `brew install --cask blackhole-2ch`
@@ -132,14 +137,9 @@ Walk the user through choosing their preferences. Use AskUserQuestion for each s
 
 Tell the user: "First, let's find your voice. Listen to these options."
 
-Before playing previews, check which Enhanced/Premium voices are installed (get plugin dir first, then use Bash):
+Before playing previews, check which Enhanced/Premium voices are installed (use Bash):
 ```bash
-if [ -d scripts/lib ]; then
-  PLUGIN_DIR="$(pwd)"
-else
-  PLUGIN_DIR=$(grep CLAUDE_TALK_DIR ~/.claude-talk/config.env 2>/dev/null | cut -d= -f2 | tr -d '"')
-fi
-bash "$PLUGIN_DIR/scripts/lib/check-enhanced-voices.sh"
+claude-talk voices --enhanced
 ```
 
 **Recommend Enhanced voices:** If few or no Enhanced voices are installed, tell the user:

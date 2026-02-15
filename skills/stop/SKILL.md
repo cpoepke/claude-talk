@@ -10,19 +10,17 @@ Gracefully shut down the voice chat session.
 
 ## Steps
 
-1. Get CLAUDE_TALK_DIR from config (current directory if it contains scripts/, or from ~/.claude-talk/config.env):
+1. Release the active session and stop server (use Bash):
    ```bash
-   if [ -d scripts/lib ]; then
-     CLAUDE_TALK_DIR="$(pwd)"
-   else
-     CLAUDE_TALK_DIR=$(grep CLAUDE_TALK_DIR ~/.claude-talk/config.env 2>/dev/null | cut -d= -f2 | tr -d '"')
+   # Get the active session and release it
+   ACTIVE_SESSION=$(claude-talk session active 2>/dev/null)
+   if [ -n "$ACTIVE_SESSION" ]; then
+     claude-talk session release "$ACTIVE_SESSION"
    fi
+   # Also clear old state file for backwards compatibility
+   claude-talk state set SESSION stopped
+   # Stop audio server
+   claude-talk server stop
    ```
 
-2. Deactivate session and stop server (use Bash):
-   ```bash
-   bash "$CLAUDE_TALK_DIR/scripts/lib/set-session-state.sh" stopped && \
-   bash "$CLAUDE_TALK_DIR/scripts/lib/stop-audio-server.sh"
-   ```
-
-3. Confirm to the user: "Voice chat stopped."
+2. Confirm to the user: "Voice chat stopped."
