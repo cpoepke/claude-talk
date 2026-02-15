@@ -93,6 +93,86 @@ def status():
         sys.exit(1)
 
 
+@server.command("set-voice")
+@click.argument("voice")
+def set_voice(voice):
+    """Set the TTS voice on the audio server."""
+    config = Config()
+    port = config.get_int("AUDIO_SERVER_PORT", 8150)
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://localhost:{port}/voice",
+            data=json.dumps({"voice": voice}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        response = urllib.request.urlopen(req, timeout=2)
+        result = json.loads(response.read())
+        click.echo(json.dumps(result))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@server.command("speak")
+@click.argument("text")
+@click.option("--timeout", default=3600, help="Request timeout in seconds")
+def speak(text, timeout):
+    """Speak text via TTS and capture user response."""
+    config = Config()
+    port = config.get_int("AUDIO_SERVER_PORT", 8150)
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://localhost:{port}/speak",
+            data=json.dumps({"text": text}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        response = urllib.request.urlopen(req, timeout=timeout)
+        result = json.loads(response.read())
+        click.echo(json.dumps(result))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@server.command("listen")
+@click.option("--timeout", default=3600, help="Request timeout in seconds")
+def listen(timeout):
+    """Listen for user speech (blocking)."""
+    config = Config()
+    port = config.get_int("AUDIO_SERVER_PORT", 8150)
+    try:
+        import urllib.request
+        response = urllib.request.urlopen(f"http://localhost:{port}/listen", timeout=timeout)
+        result = json.loads(response.read())
+        click.echo(json.dumps(result))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@server.command("queue-listen")
+def queue_listen():
+    """Queue a background listen operation."""
+    config = Config()
+    port = config.get_int("AUDIO_SERVER_PORT", 8150)
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            f"http://localhost:{port}/queue-listen",
+            data=b"",
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=2)
+        click.echo("Queued")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 # ── Session commands ─────────────────────────────────────────────────────────
 
 
@@ -319,6 +399,20 @@ def active():
     name = get_active_personality()
     if name:
         click.echo(name)
+    else:
+        click.echo("(none)", err=True)
+        sys.exit(1)
+
+
+@personality.command("display")
+def personality_display():
+    """Show the active personality display name (with emoji)."""
+    from .personality import load_personality
+    info = load_personality()
+    if info and info.get("display_name"):
+        click.echo(info["display_name"])
+    elif info and info.get("identity_name"):
+        click.echo(info["identity_name"])
     else:
         click.echo("(none)", err=True)
         sys.exit(1)

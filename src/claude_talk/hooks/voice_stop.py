@@ -11,8 +11,8 @@ Claude thinks. Next /speak checks the buffer first.
 
 import json
 import re
+import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
 from ..channels import ChannelManager
@@ -54,21 +54,10 @@ def run():
         return
 
     # Load session's personality and update audio server voice if needed
-    config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
     session_info = store.get_personality(session_id)
     if session_info and session_info.get("voice"):
         voice = session_info["voice"]
-        try:
-            req = urllib.request.Request(
-                f"http://localhost:{port}/voice",
-                data=json.dumps({"voice": voice}).encode(),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            urllib.request.urlopen(req, timeout=2)
-        except Exception:
-            pass
+        _run_cli(["server", "set-voice", voice])
 
     # Extract last assistant text from transcript JSONL
     transcript_path = Path(hook_input.get("transcript_path", ""))
@@ -80,16 +69,8 @@ def run():
         sys.exit(0)
 
     # Speak response and capture next utterance
-    try:
-        req = urllib.request.Request(
-            f"http://localhost:{port}/speak",
-            data=json.dumps({"text": last_msg}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        response = urllib.request.urlopen(req, timeout=3600)
-        result = json.loads(response.read())
-    except Exception:
+    result = _run_cli(["server", "speak", last_msg, "--timeout", "3600"])
+    if not result:
         _output_decision("block", "Audio server not responding. The voice session may have crashed. Ask the user what to do.")
         return
 
@@ -109,13 +90,11 @@ def run():
             _output_decision("block", "No speech detected after extended listening. Ask the user if they are still there.")
             return
 
-        try:
-            response = urllib.request.urlopen(f"http://localhost:{port}/listen", timeout=3600)
-            result = json.loads(response.read())
-            text = result.get("text", "")
-        except Exception:
+        result = _run_cli(["server", "listen", "--timeout", "3600"])
+        if not result:
             _output_decision("block", "Audio server not responding. The voice session may have crashed. Ask the user what to do.")
             return
+        text = result.get("text", "")
 
         if text == "(wlk_error)":
             _output_decision("block", "Whisper speech recognition is not responding. Ask the user if they want to restart the voice session.")
@@ -130,9 +109,8 @@ def run():
     if word_count < 2 or len(clean) < 5:
         # Too short — retry
         for _ in range(2):
-            try:
-                response = urllib.request.urlopen(f"http://localhost:{port}/listen", timeout=3600)
-                result = json.loads(response.read())
+            result = _run_cli(["server", "listen", "--timeout", "3600"])
+            if result:
                 text = result.get("text", "")
                 if text and text not in ("(silence)", "(muted)"):
                     clean = re.sub(r'\[[^]]*\]', '', text)
@@ -141,19 +119,9 @@ def run():
                     word_count = len(clean.split())
                     if word_count >= 2:
                         break
-            except Exception:
-                pass
 
     # Start buffered listen for the gap while Claude is thinking
-    try:
-        req = urllib.request.Request(
-            f"http://localhost:{port}/queue-listen",
-            data=b"",
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=2)
-    except Exception:
-        pass
+    _run_cli(["server", "queue-listen"])
 
     # Parse routing from transcription
     route_type, target_session_id, cleaned_text = parse_route(text)
@@ -217,3 +185,19 @@ def _extract_last_assistant_message(transcript_path: Path) -> str:
 def _output_decision(decision: str, reason: str):
     """Output hook decision as JSON."""
     print(json.dumps({"decision": decision, "reason": reason}))
+
+
+def _run_cli(args: list[str]) -> dict | None:
+    """Run claude-talk CLI command and return JSON result."""
+    try:
+        result = subprocess.run(
+            ["claude-talk"] + args,
+            capture_output=True,
+            text=True,
+            timeout=3610,  # Slightly more than max listen timeout
+        )
+        if result.returncode == 0 and result.stdout:
+            return json.loads(result.stdout)
+        return None
+    except Exception:
+        return None
