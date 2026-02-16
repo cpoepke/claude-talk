@@ -48,11 +48,8 @@ Get current tmux info and register this session (use Bash):
 ```bash
 source ~/.claude-talk/venvs/wlk/bin/activate
 
-# Get tmux session, window, pane
-TMUX_SESSION=$(tmux display-message -p '#{session_name}')
-TMUX_WINDOW=$(tmux display-message -p '#{window_index}')
-TMUX_PANE=$(tmux display-message -p '#{pane_id}' | sed 's/%//')
-TMUX_TARGET="${TMUX_SESSION}:${TMUX_WINDOW}.${TMUX_PANE}"
+# Get tmux pane ID (keep the % prefix - tmux needs it)
+TMUX_TARGET=$(tmux display-message -p '#{pane_id}')
 
 # Get session ID (this conversation's ID)
 SESSION_ID=$(claude-talk session active 2>/dev/null || echo "")

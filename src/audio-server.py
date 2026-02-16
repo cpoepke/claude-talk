@@ -1105,10 +1105,19 @@ def send_transcription_to_claude(text: str) -> None:
     if not text or text == "(silence)":
         return
 
-    # Get primary session
+    # Get primary session, or fall back to any active session with tmux target
     session_id = session_store.get_primary()
     if not session_id:
-        print(f"[TMUX] No primary session found, cannot send transcription", file=sys.stderr)
+        # No primary - find any active session with a tmux target
+        sessions = session_store.list_sessions()
+        for s in sessions:
+            if s["status"] == "active" and s.get("tmux_target"):
+                session_id = s["session_id"]
+                print(f"[TMUX] No primary session, using active: {session_id[:8]}", file=sys.stderr)
+                break
+
+    if not session_id:
+        print(f"[TMUX] No active session with tmux target found", file=sys.stderr)
         return
 
     # Get tmux target
