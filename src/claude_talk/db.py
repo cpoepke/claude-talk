@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     voice TEXT,
     audio_server_port INTEGER DEFAULT 8150,
     is_primary INTEGER DEFAULT 0,
+    tmux_target TEXT,
     started_at TEXT,
     updated_at TEXT
 );
@@ -65,7 +66,7 @@ class DB:
         self.close()
 
     def _migrate_voice_column(self):
-        """Add voice and is_primary columns if they don't exist."""
+        """Add voice, is_primary, and tmux_target columns if they don't exist."""
         try:
             self.execute("SELECT voice FROM sessions LIMIT 1")
         except sqlite3.OperationalError:
@@ -76,4 +77,10 @@ class DB:
             self.execute("SELECT is_primary FROM sessions LIMIT 1")
         except sqlite3.OperationalError:
             self.execute("ALTER TABLE sessions ADD COLUMN is_primary INTEGER DEFAULT 0")
+            self.commit()
+
+        try:
+            self.execute("SELECT tmux_target FROM sessions LIMIT 1")
+        except sqlite3.OperationalError:
+            self.execute("ALTER TABLE sessions ADD COLUMN tmux_target TEXT")
             self.commit()

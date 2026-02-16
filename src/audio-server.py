@@ -39,6 +39,12 @@ import websockets
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+# Claude Talk modules
+sys.path.insert(0, str(Path(__file__).parent))
+from claude_talk.db import DB
+from claude_talk.session import SessionStore
+from claude_talk.tmux import send_to_session
+
 
 # ============================================================================
 # Speex Acoustic Echo Cancellation
@@ -1089,6 +1095,34 @@ event_logger = EventLogger(log_file)
 audio_engine = AudioEngine(config, state, event_logger)
 wlk_manager = WLKManager(config)
 
+# Session management for tmux routing
+db = DB()
+session_store = SessionStore(db)
+
+
+def send_transcription_to_claude(text: str) -> None:
+    """Send transcription to active Claude session via tmux."""
+    if not text or text == "(silence)":
+        return
+
+    # Get primary session
+    session_id = session_store.get_primary()
+    if not session_id:
+        print(f"[TMUX] No primary session found, cannot send transcription", file=sys.stderr)
+        return
+
+    # Get tmux target
+    tmux_target = session_store.get_tmux_target(session_id)
+    if not tmux_target:
+        print(f"[TMUX] No tmux target for session {session_id}", file=sys.stderr)
+        return
+
+    # Send to Claude
+    if send_to_session(tmux_target, text):
+        print(f"[TMUX] Sent to {tmux_target}: {text}", file=sys.stderr)
+    else:
+        print(f"[TMUX] Failed to send to {tmux_target}", file=sys.stderr)
+
 # Message queue for multi-session voice handling (initialized in lifespan)
 message_queue = None
 queue_processor_task = None
@@ -1223,6 +1257,10 @@ async def listen() -> TextResponse:
     event_logger.log_event("API_LISTEN_START")
     text = await audio_engine.listen()
     event_logger.log_event("API_LISTEN_END", {"text": text})
+
+    # Send transcription to Claude via tmux
+    send_transcription_to_claude(text)
+
     return TextResponse(text=text)
 
 
@@ -1240,6 +1278,10 @@ async def speak(req: SpeakRequest) -> TextResponse:
     event_logger.log_event("API_SPEAK_START", {"text": req.text})
     text = await audio_engine.speak_and_listen(req.text)
     event_logger.log_event("API_SPEAK_END", {"text": text})
+
+    # Send transcription to Claude via tmux
+    send_transcription_to_claude(text)
+
     return TextResponse(text=text)
 
 

@@ -13,6 +13,7 @@ import click
 from .config import Config
 from .db import DB
 from .session import SessionStore
+from .teammates import TeammateManager
 
 
 @click.group()
@@ -29,7 +30,9 @@ def server():
 
 
 @server.command()
-def start():
+@click.option("--spawn-teammates", is_flag=True, help="Spawn teammates for all personalities on startup")
+@click.option("--personalities", help="Comma-separated list of personalities to spawn (default: all)")
+def start(spawn_teammates, personalities):
     """Start the audio server and wait for readiness."""
     config = Config()
     wlk_venv = config.get("WLK_VENV")
@@ -43,6 +46,23 @@ def start():
     if not activate.exists():
         click.echo(f"WLK venv not found at {wlk_venv}", err=True)
         sys.exit(1)
+
+    # Spawn teammates if requested
+    if spawn_teammates:
+        click.echo("Spawning teammates...", err=True)
+        manager = _get_teammate_manager()
+
+        if personalities:
+            # Spawn specific personalities
+            for personality in personalities.split(","):
+                personality = personality.strip()
+                try:
+                    manager.spawn_teammate(personality)
+                except Exception as e:
+                    click.echo(f"Failed to spawn {personality}: {e}", err=True)
+        else:
+            # Spawn all personalities
+            manager.spawn_all_personalities()
 
     # Start in background using the venv's python
     python = Path(wlk_venv) / "bin/python3"
@@ -299,6 +319,10 @@ def _get_store() -> SessionStore:
     return SessionStore(DB())
 
 
+def _get_teammate_manager() -> TeammateManager:
+    return TeammateManager(DB())
+
+
 @session.command()
 @click.argument("session_id")
 @click.argument("personality", default="unknown")
@@ -307,7 +331,18 @@ def claim(session_id, personality, voice):
     """Claim a voice session with specific personality and voice."""
     store = _get_store()
     store.claim(session_id, personality, voice)
-    click.echo(f"Session {session_id} claimed", err=True)
+
+    # Auto-detect and set tmux target
+    tmux_env = os.environ.get("TMUX", "")
+    tmux_pane = os.environ.get("TMUX_PANE", "")
+
+    if tmux_env and tmux_pane:
+        session_name = tmux_env.split(",")[0].split("/")[-1]
+        tmux_target = f"{session_name}:{tmux_pane}"
+        store.set_tmux_target(session_id, tmux_target)
+        click.echo(f"Session {session_id} claimed (tmux: {tmux_target})", err=True)
+    else:
+        click.echo(f"Session {session_id} claimed", err=True)
 
 
 @session.command("claim-active")
@@ -409,6 +444,97 @@ def get_personality(session_id):
         click.echo(json.dumps(info))
     else:
         sys.exit(1)
+
+
+@session.command("set-tmux-target")
+@click.argument("session_id")
+@click.argument("tmux_target", required=False)
+def set_tmux_target(session_id, tmux_target):
+    """Set tmux target for sending transcriptions. Auto-detects from env if not provided."""
+    if not tmux_target:
+        # Auto-detect from environment
+        tmux_env = os.environ.get("TMUX", "")
+        tmux_pane = os.environ.get("TMUX_PANE", "")
+
+        if not tmux_env:
+            click.echo("Error: Not in tmux session and no target provided", err=True)
+            sys.exit(1)
+
+        # Extract session from TMUX env (format: /tmp/tmux-501/default,12345,0)
+        session_name = tmux_env.split(",")[0].split("/")[-1] if tmux_env else None
+
+        if session_name and tmux_pane:
+            tmux_target = f"{session_name}:{tmux_pane}"
+        elif session_name:
+            tmux_target = session_name
+        else:
+            click.echo("Error: Could not detect tmux session", err=True)
+            sys.exit(1)
+
+    store = _get_store()
+    store.set_tmux_target(session_id, tmux_target)
+    click.echo(f"Set tmux target for {session_id}: {tmux_target}", err=True)
+
+
+@session.command("get-tmux-target")
+@click.argument("session_id")
+def get_tmux_target(session_id):
+    """Get tmux target for a session."""
+    store = _get_store()
+    target = store.get_tmux_target(session_id)
+    if target:
+        click.echo(target)
+    else:
+        sys.exit(1)
+
+
+# ── Teammate commands ────────────────────────────────────────────────────────
+
+
+@cli.group()
+def teammate():
+    """Multi-personality teammate management."""
+
+
+@teammate.command("spawn")
+@click.argument("personality")
+@click.option("--session-id", help="Optional session ID (generates UUID if not provided)")
+def spawn_teammate(personality, session_id):
+    """Spawn a Claude Code teammate with a specific personality."""
+    manager = _get_teammate_manager()
+    info = manager.spawn_teammate(personality, session_id)
+    click.echo(json.dumps(info, indent=2))
+
+
+@teammate.command("spawn-all")
+def spawn_all():
+    """Spawn teammates for all available personalities."""
+    manager = _get_teammate_manager()
+    teammates = manager.spawn_all_personalities()
+    click.echo(json.dumps(teammates, indent=2))
+
+
+@teammate.command("list")
+def list_teammates():
+    """List all active teammates."""
+    manager = _get_teammate_manager()
+    teammates = manager.list_teammates()
+    click.echo(json.dumps(teammates, indent=2))
+
+
+@teammate.command("kill")
+@click.argument("session_id")
+def kill_teammate(session_id):
+    """Kill a teammate by session ID."""
+    manager = _get_teammate_manager()
+    manager.kill_teammate(session_id)
+
+
+@teammate.command("kill-all")
+def kill_all():
+    """Kill all active teammates."""
+    manager = _get_teammate_manager()
+    manager.kill_all_teammates()
 
 
 # ── Config commands ──────────────────────────────────────────────────────────
