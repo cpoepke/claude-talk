@@ -208,3 +208,19 @@ class SessionStore:
 
         existing = self.db.execute(query, tuple(params)).fetchone()
         return existing is None
+
+    def set_tmux_target(self, session_id: str, tmux_target: str) -> None:
+        """Set tmux target (session:pane) for sending transcriptions."""
+        now = datetime.now(timezone.utc).isoformat()
+        self.db.execute(
+            "UPDATE sessions SET tmux_target=?, updated_at=? WHERE session_id=?",
+            (tmux_target, now, session_id),
+        )
+        self.db.commit()
+
+    def get_tmux_target(self, session_id: str) -> str | None:
+        """Get tmux target for a session."""
+        row = self.db.execute(
+            "SELECT tmux_target FROM sessions WHERE session_id=?", (session_id,)
+        ).fetchone()
+        return row["tmux_target"] if row and row["tmux_target"] else None
