@@ -497,20 +497,56 @@ def teammate():
 
 
 @teammate.command("spawn")
-@click.argument("personality")
-@click.option("--session-id", help="Optional session ID (generates UUID if not provided)")
-def spawn_teammate(personality, session_id):
-    """Spawn a Claude Code teammate with a specific personality."""
+@click.argument("personalities", nargs=-1)
+@click.option("--all", "spawn_all_flag", is_flag=True, help="Spawn all available personalities")
+def spawn_team(personalities, spawn_all_flag):
+    """Spawn teammates in a tmux grid. Interactive selection if no args given."""
     manager = _get_teammate_manager()
-    info = manager.spawn_teammate(personality, session_id)
-    click.echo(json.dumps(info, indent=2))
+    available = manager.available_personalities()
 
+    if not available:
+        click.echo("No personalities found in ~/.claude-talk/personalities/", err=True)
+        sys.exit(1)
 
-@teammate.command("spawn-all")
-def spawn_all():
-    """Spawn teammates for all available personalities."""
-    manager = _get_teammate_manager()
-    teammates = manager.spawn_all_personalities()
+    if spawn_all_flag:
+        selected = [p for p in available if manager.session_store.is_personality_available(p)]
+    elif personalities:
+        selected = list(personalities)
+    else:
+        # Interactive selection
+        click.echo("Available personalities:")
+        for i, name in enumerate(available, 1):
+            status = "" if manager.session_store.is_personality_available(name) else " (active)"
+            click.echo(f"  {i}. {name}{status}")
+        click.echo()
+        choices = click.prompt(
+            "Enter numbers or names (comma-separated), or 'all'",
+            type=str,
+        )
+        if choices.strip().lower() == "all":
+            selected = [p for p in available if manager.session_store.is_personality_available(p)]
+        else:
+            selected = []
+            for part in choices.split(","):
+                part = part.strip()
+                if part.isdigit():
+                    idx = int(part) - 1
+                    if 0 <= idx < len(available):
+                        selected.append(available[idx])
+                elif part in available:
+                    selected.append(part)
+
+    if not selected:
+        click.echo("No personalities selected", err=True)
+        sys.exit(1)
+
+    # Ensure uniqueness
+    if len(selected) != len(set(selected)):
+        click.echo("Error: Duplicate personalities not allowed", err=True)
+        sys.exit(1)
+
+    click.echo(f"Spawning {len(selected)} teammates: {', '.join(selected)}", err=True)
+    teammates = manager.spawn_team(selected)
     click.echo(json.dumps(teammates, indent=2))
 
 
@@ -729,23 +765,100 @@ def personality_display(session_id, color, output_json):
 # ── State commands ───────────────────────────────────────────────────────────
 
 
-@cli.command("state")
-@click.argument("action", type=click.Choice(["set"]))
-@click.argument("key")
-@click.argument("value")
-def state_cmd(action, key, value):
-    """Set session state (legacy compat)."""
-    state_file = Path.home() / ".claude-talk/state"
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    # Read existing state
+def _state_lock_acquire(lock_dir: Path, retries: int = 50) -> bool:
+    """Acquire lock via mkdir (atomic on macOS, no flock needed)."""
+    for _ in range(retries):
+        try:
+            lock_dir.mkdir()
+            return True
+        except FileExistsError:
+            import time
+            time.sleep(0.1)
+    # Stale lock - force remove and retry once
+    import shutil
+    shutil.rmtree(lock_dir, ignore_errors=True)
+    try:
+        lock_dir.mkdir()
+        return True
+    except FileExistsError:
+        return False
+
+
+def _state_lock_release(lock_dir: Path):
+    """Release lock."""
+    import shutil
+    shutil.rmtree(lock_dir, ignore_errors=True)
+
+
+def _state_read_file(state_file: Path) -> dict:
+    """Read state file into dict."""
     state = {}
     if state_file.exists():
         for line in state_file.read_text().splitlines():
             if "=" in line:
                 k, _, v = line.partition("=")
                 state[k.strip()] = v.strip()
-    state[key] = value
+    return state
+
+
+def _state_write_file(state_file: Path, state: dict):
+    """Write state dict to file."""
     state_file.write_text("\n".join(f"{k}={v}" for k, v in state.items()) + "\n")
+
+
+@cli.group()
+def state():
+    """Session state management."""
+
+
+@state.command("set")
+@click.argument("key")
+@click.argument("value")
+def state_set(key, value):
+    """Set a state key-value pair."""
+    state_file = Path.home() / ".claude-talk/state"
+    lock_dir = state_file.parent / ".state.lock"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+
+    if not _state_lock_acquire(lock_dir):
+        click.echo("Failed to acquire state lock", err=True)
+        sys.exit(1)
+
+    try:
+        state_dict = _state_read_file(state_file)
+        state_dict[key] = value
+        _state_write_file(state_file, state_dict)
+    finally:
+        _state_lock_release(lock_dir)
+
+
+@state.command("get")
+@click.argument("key")
+def state_get(key):
+    """Get a state value by key."""
+    state_file = Path.home() / ".claude-talk/state"
+    if not state_file.exists():
+        sys.exit(1)
+
+    state_dict = _state_read_file(state_file)
+    value = state_dict.get(key)
+    if value is None:
+        sys.exit(1)
+    click.echo(value)
+
+
+@state.command("is-muted")
+def state_is_muted():
+    """Check if microphone is muted (exit 0 if muted, 1 if not)."""
+    state_file = Path.home() / ".claude-talk/state"
+    if not state_file.exists():
+        sys.exit(1)
+
+    state_dict = _state_read_file(state_file)
+    if state_dict.get("MUTED") == "true":
+        sys.exit(0)
+    else:
+        sys.exit(1)
 
 
 # ── Hook commands ────────────────────────────────────────────────────────────

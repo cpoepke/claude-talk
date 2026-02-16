@@ -22,9 +22,9 @@ The audio server must be running. If not, start it first by following the audio 
 
 2. Capture one utterance (use Bash with timeout 60000):
    ```bash
-   curl -s http://localhost:8150/listen
+   source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server listen --timeout 60
    ```
-   Parse the JSON response to extract the "text" field.
+   This returns the transcribed text directly.
 
 3. If text is empty, "(silence)", or "(muted)", tell the user no speech was detected.
 
@@ -32,7 +32,7 @@ The audio server must be running. If not, start it first by following the audio 
 
 5. Speak the response via TTS (use Bash):
    ```bash
-   curl -s -X POST http://localhost:8150/speak -H 'Content-Type: application/json' -d '{"text":"<your response>"}'
+   source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server speak "<your response>"
    ```
 
 6. Show the exchange to the user:

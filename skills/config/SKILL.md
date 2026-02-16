@@ -19,14 +19,10 @@ Also read `~/.claude-talk/active-personality` and show the active personality na
 
 Display a clear summary of all settings with their current effective values, noting which are defaults and which are user-set.
 
-If the audio server is running, fetch live status for device and barge-in info:
+Show current audio server status using the Python CLI (use Bash):
 ```bash
-curl -s http://localhost:8150/status 2>/dev/null
+source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server status
 ```
-If it returns JSON, display:
-- **Input device**: name and index, whether auto-detected
-- **Output device**: name and index
-- **Barge-in**: enabled/disabled, BlackHole device index if available
 
 Also show audio devices (use Bash):
 ```bash

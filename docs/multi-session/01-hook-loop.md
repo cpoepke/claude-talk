@@ -31,19 +31,14 @@ Send next message
 ### Stop Hook (`.claude/hooks/voice-stop.sh`)
 ```bash
 #!/bin/bash
-
-# Get response from Claude
-RESPONSE=$(cat)
-
-# Speak via TTS
-echo "$RESPONSE" | say -v Alex
-
-# Get next transcription from audio server
-NEXT_INPUT=$(curl -s http://localhost:8091/transcription)
-
-# Send to Claude
-echo "$NEXT_INPUT"
+source "$HOME/.claude-talk/venvs/wlk/bin/activate"
+claude-talk hook stop
 ```
+
+The `claude-talk hook stop` command:
+- Speaks Claude's response via TTS
+- Captures user speech via audio server
+- Returns the transcribed text to inject as the next message
 
 ## Characteristics
 

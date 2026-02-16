@@ -10,17 +10,18 @@ Pause microphone capture during a voice chat session.
 
 ## Steps
 
-1. Read `~/.claude-talk/config.env` to get `CLAUDE_TALK_DIR`.
-
-2. Check that a voice session is active (Bash):
+1. Check that a voice session is active (use Bash):
    ```bash
-   source "<CLAUDE_TALK_DIR>/scripts/state.sh" && [[ "$(voice_state_read SESSION)" == "active" ]] && echo "active" || echo "inactive"
+   source ~/.claude-talk/venvs/wlk/bin/activate
+   claude-talk state get SESSION
    ```
-   If inactive, tell the user: "No voice chat session is active. Start one with `/claude-talk:start`."
+   If it returns non-zero or the value is not "active", tell the user: "No voice chat session is active. Start one with `/claude-talk:start`."
 
-3. Set muted state (Bash):
+2. Set muted state (use Bash):
    ```bash
-   source "<CLAUDE_TALK_DIR>/scripts/state.sh" && voice_state_write MUTED=true STATUS=muted
+   source ~/.claude-talk/venvs/wlk/bin/activate
+   claude-talk state set MUTED true
+   claude-talk state set STATUS muted
    ```
 
-4. Confirm: "Microphone muted. Run `/claude-talk:unmute` to resume."
+3. Confirm: "Microphone muted. Run `/claude-talk:unmute` to resume."

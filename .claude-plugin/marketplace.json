@@ -3,16 +3,20 @@
   "owner": {
     "name": "Conrad Poepke"
   },
+  "metadata": {
+    "description": "Voice conversation plugins for Claude Code"
+  },
   "plugins": [
     {
       "name": "claude-talk",
       "source": "./",
       "description": "Voice conversation with Claude Code. Speak into your mic, get spoken responses. Real-time transcription via WhisperLiveKit (MLX Metal GPU) + macOS TTS. Apple Silicon Mac only.",
-      "version": "0.1.0",
+      "version": "0.3.0",
       "author": {
         "name": "Conrad Poepke"
       },
-      "license": "MIT"
+      "license": "MIT",
+      "strict": false
     }
   ]
 }

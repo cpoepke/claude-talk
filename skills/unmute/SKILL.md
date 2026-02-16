@@ -10,17 +10,18 @@ Resume microphone capture during a voice chat session.
 
 ## Steps
 
-1. Read `~/.claude-talk/config.env` to get `CLAUDE_TALK_DIR`.
-
-2. Check that a voice session is active (Bash):
+1. Check that a voice session is active (use Bash):
    ```bash
-   source "<CLAUDE_TALK_DIR>/scripts/state.sh" && [[ "$(voice_state_read SESSION)" == "active" ]] && echo "active" || echo "inactive"
+   source ~/.claude-talk/venvs/wlk/bin/activate
+   claude-talk state get SESSION
    ```
-   If inactive, tell the user: "No voice chat session is active. Start one with `/claude-talk:start`."
+   If it returns non-zero or the value is not "active", tell the user: "No voice chat session is active. Start one with `/claude-talk:start`."
 
-3. Clear muted state (Bash):
+2. Clear muted state (use Bash):
    ```bash
-   source "<CLAUDE_TALK_DIR>/scripts/state.sh" && voice_state_write MUTED=false STATUS=listening
+   source ~/.claude-talk/venvs/wlk/bin/activate
+   claude-talk state set MUTED false
+   claude-talk state set STATUS listening
    ```
 
-4. Confirm: "Microphone unmuted. Listening for speech."
+3. Confirm: "Microphone unmuted. Listening for speech."

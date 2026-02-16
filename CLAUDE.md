@@ -41,7 +41,7 @@ All processing is local except the Claude API call.
 
 **Thin hooks:**
 - Hooks should be minimal bash that calls Python CLI
-- No logic beyond session checks and curl to audio server
+- No logic beyond calling `claude-talk` commands
 - All state management through Python CLI commands
 
 ## Key paths
