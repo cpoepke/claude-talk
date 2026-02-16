@@ -2,9 +2,11 @@
 
 ## TL;DR
 
-**Recommendation**: Use **Tmux Send-Keys** approach (feature/tmux-teammates branch)
+**Current Architecture**: **Tmux Send-Keys** (merged to main, production)
 
 **Why**: Instant latency + multi-personality support = best user experience
+
+**Status**: Hook Loop approach has been deprecated and removed
 
 ## The Problem
 
@@ -20,9 +22,9 @@ How to send voice transcriptions to Claude Code sessions when supporting multipl
 
 ## Approaches Evaluated
 
-### 1. Hook Loop (Current - main)
+### 1. Hook Loop (Legacy - deprecated)
 
-**How**: Stop hook cycles between user input and Claude responses
+**How**: Stop hook cycled between user input and Claude responses
 
 **Pros**:
 - ⚡ Instant (0ms latency)
@@ -34,6 +36,8 @@ How to send voice transcriptions to Claude Code sessions when supporting multipl
 - ❌ Can't support multiple personalities
 
 **Verdict**: ✅ Perfect for single personality, ❌ doesn't meet multi-personality requirement
+
+**Status**: 🗄️ Deprecated and removed from codebase
 
 ---
 
@@ -55,7 +59,7 @@ How to send voice transcriptions to Claude Code sessions when supporting multipl
 
 ---
 
-### 3. Tmux Send-Keys (Implemented - feature/tmux-teammates)
+### 3. Tmux Send-Keys (Production - main)
 
 **How**: Direct injection via `tmux send-keys` to dedicated Claude sessions
 
@@ -71,6 +75,8 @@ How to send voice transcriptions to Claude Code sessions when supporting multipl
 - 📊 Session management overhead
 
 **Verdict**: ✅ **Meets all requirements** with acceptable trade-offs
+
+**Status**: ✅ Merged to main, production architecture
 
 ## Decision Matrix
 
@@ -134,35 +140,33 @@ End-to-end response time: ~5s (includes Claude thinking + response generation)
 
 | Approach | Branch | Status | Lines of Code |
 |----------|--------|--------|---------------|
-| Hook Loop | `main` | ✅ Production | ~50 |
+| Hook Loop | None | 🗄️ Deprecated (removed) | 0 |
 | Inbox JSON | None | 🔬 Investigation only | 0 |
-| Tmux Send-Keys | `feature/tmux-teammates` | 🌿 Feature complete | ~440 |
+| Tmux Send-Keys | `main` | ✅ Production | ~440 |
 
-## Recommendation
+## Decision: Tmux Send-Keys (Implemented)
 
-### Use Tmux Send-Keys
-
-**Merge `feature/tmux-teammates` to main**
+**Status**: ✅ Merged to main (2026-02-16)
 
 **Reasoning**:
 1. ✅ Meets all requirements
 2. ⚡ Instant latency (critical for conversation)
 3. 🎭 Full multi-personality support
-4. 🔄 Backward compatible (hook loop still works for single personality)
-5. 📦 Fully implemented and tested
+4. 📦 Fully implemented and tested
+5. 🗄️ Hook loop removed - unified architecture
 
 **Trade-offs**:
-- Requires tmux (acceptable - already in use)
+- Requires tmux (acceptable - common in development environments)
 - More complex than hook loop (but necessary for multi-personality)
-- Higher resource usage (multiple Claude processes)
+- Higher resource usage with multiple personalities (acceptable trade-off)
 
-## Next Steps
+## Migration Complete
 
-1. **Review** `feature/tmux-teammates` branch code
-2. **Test** multi-personality scenarios
-3. **Merge** to main
-4. **Document** teammate management in user docs
-5. **Update** install skill to explain multi-personality setup
+Hook-based voice chat has been fully replaced with tmux routing:
+- ✅ Stop hook removed
+- ✅ All skills updated (start, mute, unmute, chat, config)
+- ✅ Documentation updated
+- ✅ README reflects new architecture
 
 ## Alternative Scenarios
 

@@ -42,12 +42,38 @@ source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server start
 
 If it fails, tell the user and abort.
 
-### 3. Activate Voice Session
+### 3. Register Session for Tmux Routing
 
-Set session state to active (use Bash). The hook will claim the session automatically on first run:
+Get current tmux info and register this session (use Bash):
 ```bash
 source ~/.claude-talk/venvs/wlk/bin/activate
+
+# Get tmux session, window, pane
+TMUX_SESSION=$(tmux display-message -p '#{session_name}')
+TMUX_WINDOW=$(tmux display-message -p '#{window_index}')
+TMUX_PANE=$(tmux display-message -p '#{pane_id}' | sed 's/%//')
+TMUX_TARGET="${TMUX_SESSION}:${TMUX_WINDOW}.${TMUX_PANE}"
+
+# Get session ID (this conversation's ID)
+SESSION_ID=$(claude-talk session active 2>/dev/null || echo "")
+
+if [ -z "$SESSION_ID" ]; then
+  echo "Error: No active session found"
+  exit 1
+fi
+
+# Get personality name from active-personality file
+PERSONALITY=$(cat ~/.claude-talk/active-personality 2>/dev/null || echo "claude")
+
+# Get voice from personality.md
+VOICE=$(grep -A 1 "## Voice" ~/.claude-talk/personality.md | grep "Voice:" | sed 's/.*Voice: //')
+
+# Register this session for tmux routing
+claude-talk session set-tmux-target "$SESSION_ID" "$TMUX_TARGET"
+claude-talk session update-personality "$SESSION_ID" "$PERSONALITY" --voice "$VOICE"
 claude-talk state set SESSION active
+
+echo "Registered: $SESSION_ID -> $TMUX_TARGET (personality: $PERSONALITY)"
 ```
 
 ### 4. Greet the User
@@ -62,11 +88,17 @@ Examples (adapt to your personality style):
 - Witty Jarvis: "Evening, Tony. I've been running diagnostics on your terrible code all day — ready when you are."
 - Casual Claude to Conrad: "Hey Conrad, happy Thursday. What are we breaking today?"
 
-Just output this greeting as plain text in your response. Do NOT call the audio server directly — the Stop hook will automatically speak it aloud via `/speak` (which includes TTS + barge-in + capture) and inject the user's first utterance back into the conversation. You don't need to do anything else — just respond naturally.
+**Speak the greeting using TTS (use Bash):**
+```bash
+source ~/.claude-talk/venvs/wlk/bin/activate
+claude-talk server speak "Your greeting text here"
+```
+
+After speaking, tell the user: "Voice chat active. Speak into your mic — the audio server will route your speech back here."
 
 ### 5. Conversational Mode
 
-While voice chat is active, respond conversationally. The Stop hook captures user speech and injects it as the reason in a "block" decision, appearing as "The user said aloud: ..." in your context.
+While voice chat is active, the audio server captures speech and routes transcriptions back to this tmux session via `tmux send-keys`.
 
 **IMPORTANT - Stay in character:**
 - You ARE the personality defined in personality.md at all times
@@ -82,7 +114,10 @@ While voice chat is active, respond conversationally. The Stop hook captures use
 - Speak as you would in a natural conversation
 - If the user says "stop", "quit", "end voice chat", or "goodbye", run /claude-talk:stop
 
-**CRITICAL - Only the final text output gets spoken via TTS.**
-- Do NOT output intermediate text before tool calls (e.g., "Let me check those logs!") — the user won't hear it, it just sits silently on screen.
-- If you need to use tools (read files, run commands, etc.), do the tool calls FIRST with no preceding text, then put your complete response in the final text output.
-- Every text message you output should be your full, spoken response — not a teaser before work happens.
+**CRITICAL - You MUST call TTS for every response:**
+```bash
+source ~/.claude-talk/venvs/wlk/bin/activate
+claude-talk server speak "Your response here"
+```
+
+Do the tool call FIRST, then output a brief confirmation like "(spoke)" so the user knows you responded. The audio server will handle capturing their next utterance and routing it back.

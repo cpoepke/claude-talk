@@ -8,37 +8,42 @@ The system uses two capture modes:
 
 - **VAD (legacy)** - Energy-based voice activity detection captures audio locally, then sends the complete WAV to a whisper-cpp HTTP server for batch transcription. Simpler but higher latency.
 
-## Stop hook architecture
+## Tmux routing architecture
 
-`/claude-talk:start` activates a **Stop hook** that drives the voice conversation loop with zero extra Claude API overhead:
+`/claude-talk:start` registers the current tmux session for **audio routing**:
 
 ```
-Claude responds with text
+Claude calls: claude-talk server speak "response text"
     |
     v
-Stop hook fires (bash script)
+Audio server plays TTS
     |
     v
-Extract last assistant message from transcript JSONL
+Audio server captures mic (WhisperLiveKit)
     |
     v
-POST /speak-and-listen (TTS + mic capture, with barge-in)
+Transcription complete
     |
     v
-User speaks → transcription returned
+Audio server looks up tmux target for active session
     |
     v
-Hook returns decision:"block" with reason:"The user said aloud: <text>"
+tmux send-keys <target> "The user said aloud: <text>"
     |
     v
-Claude sees the speech as context, responds → Stop hook fires → loop
+Transcription injected as user message
+    |
+    v
+Claude responds → calls server speak → loop
 ```
 
-The hook is a bash script (`.claude/hooks/voice-stop.sh`). It makes HTTP calls to the audio server — no Claude API calls, no context accumulation. The loop breaks when `SESSION` in `~/.claude-talk/state` is set to `stopped` (via `/claude-talk:stop`).
+Each Claude response **must explicitly call** `claude-talk server speak` for TTS. The audio server tracks which tmux session/pane to route transcriptions back to via SQLite session management. This enables multiple personalities to run simultaneously in different tmux panes, each with their own routing target.
 
-### Server-side buffering
-
-To minimize the gap between hook invocations (while Claude is thinking), the hook calls `POST /queue-listen` before returning. This starts a background capture on the audio server. When the next `/speak-and-listen` fires, it checks for buffered speech first — if the user already spoke during the thinking gap, it skips capture and just does TTS.
+Session registration happens automatically during `/claude-talk:start`:
+- Extracts tmux session, window, and pane ID
+- Claims session in SQLite with personality and voice
+- Sets tmux target (format: `session:window.pane`)
+- Audio server uses this target for `tmux send-keys`
 
 ## Audio server
 
@@ -46,15 +51,13 @@ To minimize the gap between hook invocations (while Claude is thinking), the hoo
 
 | Endpoint | Description |
 | -------- | ----------- |
+| `POST /speak` | Play TTS, then capture and route back via tmux |
 | `GET /listen` | Block until user speaks, return transcription |
-| `POST /speak-and-listen` | TTS + capture in one call (checks buffer first) |
-| `POST /speak` | TTS only |
-| `POST /queue-listen` | Start background capture for buffering |
-| `GET /status` | Current state |
+| `GET /status` | Current state (device, mic, barge-in) |
 | `POST /mute` / `POST /unmute` | Mic control |
 | `POST /stop` | Graceful shutdown |
 
-The server manages the WLK subprocess with auto-restart and serializes capture operations with an async lock.
+The server manages the WLK subprocess with auto-restart, serializes capture operations with an async lock, and handles tmux routing of transcriptions back to the appropriate Claude session.
 
 ## Barge-in (interrupt mid-speech)
 

@@ -1,26 +1,37 @@
-# Multi-Session Communication Experiments
+# Multi-Session Communication Architecture
 
 This directory documents different approaches tested for sending voice transcriptions to Claude Code sessions, particularly for supporting multiple personalities simultaneously.
 
+## Current Implementation: Tmux Send-Keys
+
+**Status**: ✅ Production (main branch)
+**Latency**: Instant (direct injection)
+**Multi-session**: ✅ Full support (multiple personalities)
+
+The audio server routes transcriptions to specific Claude sessions via `tmux send-keys`. Each session registers its tmux target (session:window.pane) during `/claude-talk:start`. See [03-tmux-send-keys.md](03-tmux-send-keys.md) for details.
+
 ## Approaches Tested
 
-### 1. [Hook Loop Approach](01-hook-loop.md) (Current Implementation)
-- **Status**: ✅ Production (main branch)
+### 1. [Hook Loop Approach](01-hook-loop.md) (Legacy)
+- **Status**: 🗄️ Deprecated (replaced by tmux routing)
 - **Latency**: Instant (synchronous)
 - **Multi-session**: ❌ Single session only
-- Simple Stop hook loop that cycles between user input and Claude responses
+- Stop hook loop that cycled between user input and Claude responses
+- **Why replaced**: Couldn't support multiple personalities simultaneously
 
 ### 2. [Inbox JSON Polling](02-inbox-json.md) (Investigated)
 - **Status**: 🔬 Experimental (not implemented)
 - **Latency**: ~1 second (polling)
 - **Multi-session**: ✅ Native support (one team per session)
-- Discovered Claude Code's teammate inbox messaging system
+- Claude Code's teammate inbox messaging system
+- **Why not used**: 1s latency unacceptable for conversational voice
 
-### 3. [Tmux Send-Keys](03-tmux-send-keys.md) (Implemented)
-- **Status**: 🌿 Feature branch (`feature/tmux-teammates`)
+### 3. [Tmux Send-Keys](03-tmux-send-keys.md) (Current)
+- **Status**: ✅ Production (main branch)
 - **Latency**: Instant (direct injection)
 - **Multi-session**: ✅ Full support (teammate per personality)
-- Direct tmux injection with TeammateManager
+- Direct tmux injection with session management
+- **Why chosen**: Instant latency + multi-personality support
 
 ## Comparison Matrix
 
@@ -32,13 +43,11 @@ This directory documents different approaches tested for sending voice transcrip
 | **Coupling** | Tight | Loose | Medium |
 | **Barge-in** | Natural | Complex | Natural |
 | **Scalability** | Single | High | High |
-| **Implementation** | Hook script | Not impl. | Full impl. |
+| **Status** | Deprecated | Not impl. | ✅ Production |
 
-## Recommendations
+## Architecture Decision
 
-- **Single personality**: Use Hook Loop (current)
-- **Multiple personalities**: Use Tmux Send-Keys (feature/tmux-teammates)
-- **Loosely coupled architecture**: Consider Inbox JSON (requires tolerating 1s latency)
+**Tmux routing** is the production architecture for all voice chat sessions (single or multi-personality). The hook-based approach has been removed.
 
 ## Testing Timeline
 

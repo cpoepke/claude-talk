@@ -204,33 +204,36 @@ These improvements prevent cascade failures when WLK becomes unresponsive, parti
 
 ## Architecture
 
-Voice chat uses a **Stop hook** instead of a teammate — zero extra Claude API overhead. The hook fires after each assistant response, speaks it via TTS, captures the user's next utterance, and injects it back into the conversation. Server-side buffering keeps the mic hot during Claude's thinking time.
+Voice chat uses **tmux-based routing** for multi-personality support. The audio server captures speech and routes transcriptions back to specific Claude sessions via `tmux send-keys`. Each response explicitly calls `claude-talk server speak` for TTS. This enables multiple personalities to run simultaneously in different tmux panes.
 
-For details on the capture pipeline, hook architecture, echo prevention, and microphone gain, see [docs/architecture.md](docs/architecture.md).
+For details on the capture pipeline, routing architecture, echo prevention, and microphone gain, see [docs/architecture.md](docs/architecture.md).
 
 ## File structure
 
 ```text
 claude-talk/
-├── .claude/
-│   ├── hooks/
-│   │   └── voice-stop.sh         # Stop hook (voice conversation loop)
-│   └── settings.json             # Hook registration
 ├── .claude-plugin/
-│   └── plugin.json               # Plugin manifest
+│   └── marketplace.json          # Plugin manifest (single source of truth)
 ├── skills/
 │   ├── install/SKILL.md          # Install + onboarding
-│   ├── start/SKILL.md            # Start voice chat
+│   ├── start/SKILL.md            # Start voice chat (tmux routing)
 │   ├── stop/SKILL.md             # Stop voice chat
 │   ├── chat/SKILL.md             # Quick single exchange
 │   ├── config/SKILL.md           # View/edit config
-│   ├── personality/SKILL.md       # Personality management
+│   ├── personality/SKILL.md      # Personality management
 │   └── help/SKILL.md             # Show help
 ├── src/
-│   └── audio-server.py           # Audio server (TTS, capture, barge-in, WLK)
+│   ├── audio-server.py           # Audio server (TTS, capture, barge-in, WLK)
+│   └── claude_talk/              # Python CLI package
+│       ├── cli.py                # claude-talk CLI commands
+│       ├── session.py            # Session management (SQLite)
+│       ├── tmux.py               # Tmux routing
+│       ├── teammates.py          # Multi-personality spawning
+│       └── ...
 ├── scripts/
 │   ├── install.sh                # Dependency installer
-│   └── ...                       # Legacy capture scripts
+│   └── statusline.sh             # Claude Code statusline setup
+├── personalities/                # Default personality templates
 ├── config/
 │   └── defaults.env              # Default configuration
 ├── CLAUDE.md                     # Plugin context for Claude
