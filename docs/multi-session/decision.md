@@ -17,7 +17,7 @@ How to send voice transcriptions to Claude Code sessions when supporting multipl
 1. **Multi-personality**: Support multiple personalities running at once (Alice, Bob, Charlie)
 2. **Low latency**: Conversational feel requires instant response
 3. **Session routing**: Audio server must route to correct personality
-4. **Barge-in support**: User can interrupt Claude mid-response
+4. **Interrupt support**: User can interrupt Claude mid-response
 5. **Scalability**: Easy to add more personalities
 
 ## Approaches Evaluated
@@ -29,7 +29,7 @@ How to send voice transcriptions to Claude Code sessions when supporting multipl
 **Pros**:
 - ⚡ Instant (0ms latency)
 - 🎯 Simple (single script)
-- 🎤 Natural barge-in
+- 🎤 Natural interrupt
 
 **Cons**:
 - 🚫 Single session only
@@ -53,7 +53,7 @@ How to send voice transcriptions to Claude Code sessions when supporting multipl
 **Cons**:
 - 🐌 **~1 second latency** (measured)
 - 🔄 Bidirectional polling complexity
-- ❓ Harder barge-in
+- ❓ Harder interrupt
 
 **Verdict**: ❌ 1 second latency breaks conversational flow (disqualifying)
 
@@ -67,7 +67,7 @@ How to send voice transcriptions to Claude Code sessions when supporting multipl
 - ⚡ Instant (0ms latency)
 - 🎭 Multi-personality support
 - 🔍 Session isolation
-- 🎤 Natural barge-in
+- 🎤 Natural interrupt
 - 🚀 Scalable
 
 **Cons**:
@@ -85,7 +85,7 @@ How to send voice transcriptions to Claude Code sessions when supporting multipl
 | Multi-personality | ❌ | ✅ | ✅ |
 | Low latency | ✅ (0ms) | ❌ (~1s) | ✅ (0ms) |
 | Session routing | ❌ | ✅ | ✅ |
-| Barge-in | ✅ | ⚠️ | ✅ |
+| Interrupt | ✅ | ⚠️ | ✅ |
 | Scalability | ❌ | ✅ | ✅ |
 | **Total Score** | 2/5 | 3/5 | **5/5** |
 

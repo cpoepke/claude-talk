@@ -1,6 +1,6 @@
-# Barge-In Setup Guide
+# Interrupt Setup Guide
 
-Barge-in lets you interrupt Claude mid-sentence by speaking. Claude stops talking immediately and listens to what you say instead. Without it, you have to wait for Claude to finish before you can respond.
+Interrupt lets you interrupt Claude mid-sentence by speaking. Claude stops talking immediately and listens to what you say instead. Without it, you have to wait for Claude to finish before you can respond.
 
 ## How it works
 
@@ -11,7 +11,7 @@ The system uses **Geigel double-talk detection** to distinguish your voice from 
    - **Mic stream**: Your microphone (contains your voice + TTS echo)
    - **Reference stream**: BlackHole (contains only clean TTS audio)
 3. It compares the mic RMS power to the reference RMS power. TTS echo typically shows up as ~5-12% of the reference level. Real speech pushes the ratio above 40%
-4. When the ratio exceeds the threshold for 3 consecutive frames, barge-in triggers: TTS is killed and capture switches to normal transcription mode
+4. When the ratio exceeds the threshold for 3 consecutive frames, interrupt triggers: TTS is killed and capture switches to normal transcription mode
 
 ## Requirements
 
@@ -47,13 +47,13 @@ Go to **System Settings > Sound > Output** and select your new Multi-Output Devi
 
 ## Configuration
 
-Barge-in is **enabled by default**. The script auto-detects BlackHole 2ch. If BlackHole isn't found, barge-in silently disables and voice chat works normally (you just can't interrupt).
+Interrupt is **enabled by default**. The script auto-detects BlackHole 2ch. If BlackHole isn't found, interrupt silently disables and voice chat works normally (you just can't interrupt).
 
 Settings in `~/.claude-talk/config.env`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `BARGE_IN` | `true` | Set to `false` to force-disable barge-in |
+| `BARGE_IN` | `true` | Set to `false` to force-disable interrupt |
 | `BLACKHOLE_DEVICE` | (auto) | Explicit device index for BlackHole. Leave unset for auto-detection |
 | `BARGE_IN_RATIO` | `0.5` | Mic/reference ratio threshold. Lower = more sensitive, higher = less sensitive |
 
@@ -61,8 +61,8 @@ Settings in `~/.claude-talk/config.env`:
 
 The default ratio of `0.4` works well for most setups. If you're having issues:
 
-- **Barge-in triggers too easily** (Claude stops when you didn't speak): Increase to `0.5` or `0.6`
-- **Barge-in doesn't trigger** (you have to shout to interrupt): Decrease to `0.3` or `0.2`
+- **Interrupt triggers too easily** (Claude stops when you didn't speak): Increase to `0.5` or `0.6`
+- **Interrupt doesn't trigger** (you have to shout to interrupt): Decrease to `0.3` or `0.2`
 - **Echo ratio reference**: TTS echo through the mic is typically 0.05-0.12. Real speech is 0.5+. The threshold sits between these ranges
 
 ### Verify BlackHole is detected
@@ -84,10 +84,10 @@ You should see a line with "BlackHole 2ch" and at least 2 input channels.
 - Check it appears in Audio MIDI Setup
 - Restart your terminal after installation
 
-**Barge-in enabled but not working**
+**Interrupt enabled but not working**
 - Confirm your system output is the Multi-Output Device (not just speakers)
 - Check that BlackHole is checked in the Multi-Output Device configuration
-- Look for "barge-in via ref device" in stderr output during voice chat
+- Look for "interrupt via ref device" in stderr output during voice chat
 
 **Audio plays but no sound from speakers**
 - In Audio MIDI Setup, ensure your speakers are checked in the Multi-Output Device

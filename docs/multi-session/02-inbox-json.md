@@ -130,7 +130,7 @@ done
 - 🐌 **~1 second latency** - polling delay (not instant)
 - 🔄 **Bidirectional polling** - both sides must poll
 - 🎛️ **Complex routing** - need session/team management
-- ❓ **Barge-in harder** - requires explicit detection
+- ❓ **Interrupt harder** - requires explicit detection
 - 📝 **File I/O overhead** - constant JSON read/write
 
 ## Performance

@@ -189,7 +189,7 @@ This requires **BlackHole 2ch** as a virtual audio loopback. Barge-in is enabled
 | `BLACKHOLE_DEVICE` | (auto) | Explicit device index for BlackHole |
 | `BARGE_IN_RATIO` | `0.4` | Mic/reference ratio threshold. Lower = more sensitive |
 
-See the [full barge-in guide](docs/barge-in-setup.md) for how the Geigel detection algorithm works, tuning advice, and troubleshooting.
+See the [full interrupt guide](docs/interrupt/setup.md) for how the Geigel detection algorithm works, tuning advice, and troubleshooting.
 
 ## Reliability
 
@@ -223,7 +223,7 @@ claude-talk/
 │   ├── personality/SKILL.md      # Personality management
 │   └── help/SKILL.md             # Show help
 ├── src/
-│   ├── audio-server.py           # Audio server (TTS, capture, barge-in, WLK)
+│   ├── audio-server.py           # Audio server (TTS, capture, interrupt, WLK)
 │   └── claude_talk/              # Python CLI package
 │       ├── cli.py                # claude-talk CLI commands
 │       ├── session.py            # Session management (SQLite)

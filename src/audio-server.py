@@ -5,12 +5,12 @@ Audio Server for Claude Talk
 Replaces shell scripts + agent with a dedicated HTTP server that handles:
 - TTS playback (macOS `say`)
 - Speech capture via WhisperLiveKit
-- Barge-in detection (Speex AEC + BlackHole)
+- Interrupt detection (Speex AEC + BlackHole)
 - State management
 - WLK subprocess lifecycle
 
 API:
-  POST /speak               - TTS + capture in one call (with barge-in)
+  POST /speak               - TTS + capture in one call (with interrupt)
   GET  /listen              - Block until user speaks, return transcription
   GET  /status              - Current state (idle/listening/speaking)
   GET  /devices             - List audio devices and active input
@@ -316,7 +316,7 @@ def auto_detect_input_device() -> int:
 
 
 class AudioEngine:
-    """Handles mic capture, TTS, barge-in, and WLK transcription"""
+    """Handles mic capture, TTS, interrupt, and WLK transcription"""
 
     def __init__(self, config: Config, state: StateManager, event_logger: EventLogger):
         self.config = config
@@ -336,7 +336,7 @@ class AudioEngine:
         self.silence_timeout = config.get_float("SILENCE_SECS", 2.0)
         self.max_duration = 60.0
 
-        # Barge-in settings
+        # Interrupt settings
         self.barge_in_enabled = config.get_bool("BARGE_IN", True)
         blackhole_cfg = config.get("BLACKHOLE_DEVICE", "")
         if blackhole_cfg:
@@ -379,7 +379,7 @@ class AudioEngine:
         print(f"AudioEngine initialized:")
         print(f"  Mic device: {self.device_index}, gain: {self.gain}")
         print(f"  TTS voice: {self.voice}")
-        print(f"  Barge-in: {self.barge_in_enabled}", end="")
+        print(f"  Interrupt: {self.barge_in_enabled}", end="")
         if self.barge_in_enabled:
             print(f" (BlackHole device: {self.blackhole_device})")
         else:
@@ -481,7 +481,7 @@ class AudioEngine:
 
     async def speak_and_listen(self, text: str) -> str:
         """
-        Speak text, then capture utterance (with barge-in if enabled).
+        Speak text, then capture utterance (with interrupt if enabled).
         Checks buffer first — if user already spoke during the gap, just speak and return that.
         """
         buffered = self.drain_buffer()
@@ -521,7 +521,7 @@ class AudioEngine:
             if not tts_pid:
                 return "(silence)"
 
-            # Capture with barge-in
+            # Capture with interrupt
             self.state.set(STATUS="speaking+listening")
             try:
                 return await self._capture_utterance(tts_pid=tts_pid, tts_text=text)
@@ -530,7 +530,7 @@ class AudioEngine:
 
     async def _capture_utterance(self, tts_pid: int = 0, tts_text: str = "") -> str:
         """
-        Core capture logic: streams mic to WLK, handles barge-in, returns text.
+        Core capture logic: streams mic to WLK, handles interrupt, returns text.
         """
         # Health check: wait for WLK to be ready before connecting
         wlk_port = self.config.get_int("WLK_PORT", 8090)
@@ -594,13 +594,13 @@ class AudioEngine:
                 print(f"  Input device changed: [{int(new_default)}] {dev['name']}")
                 self.device_index = int(new_default)
 
-        # Barge-in state
+        # Interrupt state
         barge_in_enabled = tts_active and self.barge_in_enabled and self.blackhole_device is not None
         barge_in_triggered = False
 
         loop = asyncio.get_event_loop()
         audio_queue: asyncio.Queue = asyncio.Queue()
-        barge_ref_queue: asyncio.Queue = asyncio.Queue()  # ref frames for barge-in detection
+        barge_ref_queue: asyncio.Queue = asyncio.Queue()  # ref frames for interrupt detection
         send_ref_queue: asyncio.Queue = asyncio.Queue()   # ref frames for AEC in send path
         done_event = asyncio.Event()
 
@@ -623,7 +623,7 @@ class AudioEngine:
             callback=audio_callback,
         )
 
-        # Reference stream (BlackHole) - only if barge-in enabled
+        # Reference stream (BlackHole) - only if interrupt enabled
         ref_stream = None
         if barge_in_enabled:
             ref_stream = sd.InputStream(
@@ -650,8 +650,8 @@ class AudioEngine:
                 await asyncio.sleep(0.05)
 
         async def barge_in_monitor():
-            """Adaptive barge-in: calibrates mic baseline during TTS, detects speech above it.
-            Buffers all mic frames and replays them to WLK after barge-in so no speech is lost."""
+            """Adaptive interrupt: calibrates mic baseline during TTS, detects speech above it.
+            Buffers all mic frames and replays them to WLK after interrupt so no speech is lost."""
             nonlocal barge_in_triggered
             if not barge_in_enabled:
                 return
@@ -661,7 +661,7 @@ class AudioEngine:
                 return
 
             # Geigel double-talk detection: compare raw mic/reference ratio
-            # Echo = ~5-12% of reference, real speech = 40%+ (see docs/barge-in-setup.md)
+            # Echo = ~5-12% of reference, real speech = 40%+ (see docs/interrupt-setup.md)
             buffered_mic_frames: list[np.ndarray] = []
             spike_count = 0
             frame_count = 0
@@ -684,7 +684,7 @@ class AudioEngine:
                     await asyncio.sleep(0.05)
                     continue
 
-                # Get raw mic RMS BEFORE AEC for barge-in detection
+                # Get raw mic RMS BEFORE AEC for interrupt detection
                 raw_mic_rms = float(np.sqrt(np.mean(mic_frame.astype(np.float64) ** 2)))
 
                 # Get reference RMS (TTS output via BlackHole)
@@ -757,7 +757,7 @@ class AudioEngine:
                         nonsplke_run = 0
 
                 if spike_count >= 3:
-                    self.logger.log_event("BARGE_IN_DETECTED", {"mic_rms": raw_mic_rms})
+                    self.logger.log_event("INTERRUPT_DETECTED", {"mic_rms": raw_mic_rms})
                     print(f"BARGE-IN! mic_rms={raw_mic_rms:.0f} (buffered {len(buffered_mic_frames)} frames for replay)", file=sys.stderr)
                     barge_in_triggered = True
                     try:
@@ -942,7 +942,7 @@ class AudioEngine:
             """Check for end-of-utterance"""
             await tts_done_event.wait()
             capture_start = time.monotonic()
-            # After barge-in, user is mid-thought — give them more silence leeway
+            # After interrupt, user is mid-thought — give them more silence leeway
             effective_timeout = self.silence_timeout * 2 if barge_in_triggered else self.silence_timeout
 
             while not done_event.is_set():
@@ -1158,7 +1158,7 @@ async def process_message_queue():
             original_voice = audio_engine.voice
             audio_engine.voice = voice
 
-            # Speak and listen with barge-in
+            # Speak and listen with interrupt
             try:
                 response = await audio_engine.speak_and_listen(text)
                 event_logger.log_event("QUEUE_PROCESS_END", {
@@ -1232,7 +1232,7 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/status")
 async def get_status() -> StatusResponse:
-    """Get current server state with device and barge-in info"""
+    """Get current server state with device and interrupt info"""
     import sounddevice as sd
     input_dev = sd.query_devices(audio_engine.device_index)
     default_out = sd.default.device[1]
@@ -1286,7 +1286,7 @@ async def queue_listen() -> dict[str, str]:
 
 @app.post("/speak")
 async def speak(req: SpeakRequest) -> TextResponse:
-    """Speak text via TTS, then capture user's response (with barge-in if available).
+    """Speak text via TTS, then capture user's response (with interrupt if available).
     BLOCKING: waits for user speech and returns transcription. Use /tts for async."""
     event_logger.log_event("API_SPEAK_START", {"text": req.text})
     text = await audio_engine.speak_and_listen(req.text)

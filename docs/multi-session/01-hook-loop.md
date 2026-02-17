@@ -45,7 +45,7 @@ The `claude-talk hook stop` command:
 ### Pros
 - ⚡ **Instant latency** - synchronous, no polling
 - 🎯 **Simple** - single script, easy to understand
-- 🎤 **Natural barge-in** - stop speaking → next iteration
+- 🎤 **Natural interrupt** - stop speaking → next iteration
 - 📦 **Self-contained** - no external dependencies
 
 ### Cons
@@ -57,7 +57,7 @@ The `claude-talk hook stop` command:
 
 - **Latency**: 0ms (synchronous)
 - **Response time**: Limited only by TTS speed and Claude API
-- **Barge-in**: Immediate (Ctrl+C stops TTS)
+- **Interrupt**: Immediate (Ctrl+C stops TTS)
 
 ## Use Cases
 

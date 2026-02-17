@@ -41,7 +41,7 @@ The audio server routes transcriptions to specific Claude sessions via `tmux sen
 | **Multi-session** | ❌ | ✅ | ✅ |
 | **Complexity** | Simple | Medium | Medium |
 | **Coupling** | Tight | Loose | Medium |
-| **Barge-in** | Natural | Complex | Natural |
+| **Interrupt** | Natural | Complex | Natural |
 | **Scalability** | Single | High | High |
 | **Status** | Deprecated | Not impl. | ✅ Production |
 

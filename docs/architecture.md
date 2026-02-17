@@ -53,19 +53,19 @@ Session registration happens automatically during `/claude-talk:start`:
 | -------- | ----------- |
 | `POST /speak` | Play TTS, then capture and route back via tmux |
 | `GET /listen` | Block until user speaks, return transcription |
-| `GET /status` | Current state (device, mic, barge-in) |
+| `GET /status` | Current state (device, mic, interrupt) |
 | `POST /mute` / `POST /unmute` | Mic control |
 | `POST /stop` | Graceful shutdown |
 
 The server manages the WLK subprocess with auto-restart, serializes capture operations with an async lock, and handles tmux routing of transcriptions back to the appropriate Claude session.
 
-## Barge-in (interrupt mid-speech)
+## Interrupt (interrupt mid-speech)
 
-You can interrupt Claude while it's talking by speaking. Uses Geigel double-talk detection with BlackHole 2ch as a reference signal. See [barge-in setup guide](barge-in-setup.md) for installation and configuration.
+You can interrupt Claude while it's talking by speaking. Uses Geigel double-talk detection with BlackHole 2ch as a reference signal. See [interrupt setup guide](interrupt-setup.md) for installation and configuration.
 
 ## Echo prevention
 
-The audio server sequences TTS and capture: it speaks the response first, waits for it to finish, then starts sending mic audio to WLK. When barge-in is enabled, the mic stream starts during TTS but audio is only sent to WLK after TTS finishes (or after barge-in is detected).
+The audio server sequences TTS and capture: it speaks the response first, waits for it to finish, then starts sending mic audio to WLK. When interrupt is enabled, the mic stream starts during TTS but audio is only sent to WLK after TTS finishes (or after interrupt is detected).
 
 ## Microphone gain
 

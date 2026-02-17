@@ -1,4 +1,4 @@
-# Barge-In AEC Tuning
+# Interrupt AEC Tuning
 
 ## SpeexDSP Frame Size
 
@@ -17,11 +17,11 @@ Geigel double-talk detection compares raw mic RMS to reference (BlackHole) RMS:
 - **Real speech**: ratio 0.40+ (voice dominates over echo)
 - **Threshold**: 0.15–0.40 depending on setup (configurable via `BARGE_IN_RATIO`)
 
-Key: use raw mic (pre-AEC) for barge-in detection. AEC-cleaned audio removes the echo signal needed for ratio comparison.
+Key: use raw mic (pre-AEC) for interrupt detection. AEC-cleaned audio removes the echo signal needed for ratio comparison.
 
 ## Separate Reference Queues
 
-Barge-in monitoring and the WLK send path both need reference frames from BlackHole. Using a single shared queue causes contention — whichever consumer drains the queue first starves the other.
+Interrupt monitoring and the WLK send path both need reference frames from BlackHole. Using a single shared queue causes contention — whichever consumer drains the queue first starves the other.
 
 Solution: push each ref callback frame to two independent queues (`barge_ref_queue` and `send_ref_queue`).
 

@@ -38,15 +38,15 @@ After TTS stops, the microphone hardware and audio subsystem need a moment to re
 - **Volume ducking**: Lower mic gain during TTS - still picks up loud speech
 - **Sequential (our approach)**: Simple, reliable, zero false positives
 
-## AEC Approach (for barge-in)
+## AEC Approach (for interrupt)
 
-The sequential approach works perfectly when capture follows TTS. But **barge-in** requires concurrent TTS + capture, so AEC becomes necessary.
+The sequential approach works perfectly when capture follows TTS. But **interrupt** requires concurrent TTS + capture, so AEC becomes necessary.
 
 The audio server uses **SpeexDSP AEC** with a BlackHole loopback reference signal:
 - Frame size: 20ms (320 samples) — critical for filter adaptation quality
 - Filter length: 500ms (8000 samples) — covers room reverb tails
 - Reference signal: TTS audio via BlackHole 2ch virtual loopback
 
-AEC cleans the mic signal in the send path (to WLK). Barge-in detection uses raw mic vs reference ratio (Geigel method) since it needs the echo signal for comparison.
+AEC cleans the mic signal in the send path (to WLK). Interrupt detection uses raw mic vs reference ratio (Geigel method) since it needs the echo signal for comparison.
 
-A text echo filter (`_strip_tts_echo`) acts as a safety net, removing TTS fragments from transcription even if AEC misses some bleed. See `docs/learnings/09-barge-in-aec-tuning.md` for details.
+A text echo filter (`_strip_tts_echo`) acts as a safety net, removing TTS fragments from transcription even if AEC misses some bleed. See `docs/learnings/09-interrupt-aec-tuning.md` for details.

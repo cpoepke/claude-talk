@@ -208,7 +208,7 @@ claude-talk server start --spawn-teammates
 - ⚡ **Instant latency** - direct injection, no polling
 - 🎭 **Multi-personality** - one Claude session per personality
 - 🔍 **Session isolation** - each personality has independent context
-- 🎤 **Natural barge-in** - hook loop handles it per session
+- 🎤 **Natural interrupt** - hook loop handles it per session
 - 📊 **Session tracking** - database stores routing info
 - 🚀 **Scalable** - easily add more personalities
 
@@ -223,7 +223,7 @@ claude-talk server start --spawn-teammates
 - **Latency**: 0ms (synchronous send-keys)
 - **Routing overhead**: Single database lookup (~1ms)
 - **Scalability**: Limited only by system resources
-- **Barge-in**: Immediate (Ctrl+C in each session)
+- **Interrupt**: Immediate (Ctrl+C in each session)
 
 ## Multi-Personality Flow
 

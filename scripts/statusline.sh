@@ -1,6 +1,6 @@
 #!/bin/bash
 # statusline.sh - Claude Code statusline with voice state indicator
-# Format: Model | Dir | git | [Personality] | [mic status] | barge:[on/off/--] | vol:[n%/--]
+# Format: Model | Dir | git | [Personality] | [mic status] | ⚡interrupt:[on/off/--] | vol:[n%/--]
 
 set -euo pipefail
 
