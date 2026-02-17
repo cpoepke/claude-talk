@@ -49,6 +49,38 @@ def _server_request(cmd: str, timeout: float = 5.0, **params) -> dict:
 
 
 
+def _spawn_session_holder(session_id: str, tmux_target: str):
+    """Spawn a background process that holds a persistent socket connection.
+
+    The process connects to the audio server's session_connect command and
+    blocks forever. When the tmux pane is killed, this process dies too
+    (via SIGHUP), and the server detects the socket close for ref counting.
+    """
+    # Inline Python script that runs in background
+    script = f"""
+import socket, json, time, sys
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+try:
+    sock.connect("{_SOCKET_PATH}")
+    sock.sendall(json.dumps({{"cmd": "session_connect", "session_id": "{session_id}"}}).encode() + b"\\n")
+    sock.recv(4096)  # read ack
+    while True:
+        time.sleep(3600)
+except Exception:
+    sys.exit(0)
+"""
+    # Find the python in the WLK venv (same one running the server)
+    wlk_python = Path.home() / ".claude-talk/venvs/wlk/bin/python3"
+    python = str(wlk_python) if wlk_python.exists() else sys.executable
+
+    subprocess.Popen(
+        [python, "-c", script],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=False,  # inherit session so SIGHUP kills it with pane
+    )
+
+
 # ── Server commands ──────────────────────────────────────────────────────────
 
 
@@ -495,28 +527,10 @@ def register(personality):
     store.claim(session_id, personality, voice, is_primary=is_primary)
     store.set_tmux_target(session_id, tmux_target)
 
-    # Open persistent connection to server for ref counting (background thread)
-    import threading
-
-    def _hold_session_connection():
-        """Hold a persistent socket connection to the audio server.
-        When this process exits, the OS closes the socket automatically,
-        letting the server detect the disconnect for ref counting."""
-        try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.connect(str(_SOCKET_PATH))
-            msg = {"cmd": "session_connect", "session_id": session_id}
-            sock.sendall(json.dumps(msg).encode() + b"\n")
-            # Read ack
-            sock.recv(4096)
-            # Block forever — socket stays open until process exits
-            while True:
-                time.sleep(3600)
-        except Exception:
-            pass
-
-    t = threading.Thread(target=_hold_session_connection, daemon=True)
-    t.start()
+    # Spawn a background process that holds a persistent socket connection
+    # to the audio server for ref counting. When the tmux pane dies, this
+    # process is killed and the server detects the disconnect.
+    _spawn_session_holder(session_id, tmux_target)
 
     click.echo(f"Registered: {session_id[:8]}... -> {tmux_target} (personality: {personality})")
 
