@@ -210,27 +210,51 @@ class WLKManager:
             print(f"WLK already running on port {self.port}")
             return
 
+        # Build personality prompt to bias Whisper recognition
+        self._init_prompt = self._build_personality_prompt()
+
         # Run in background task
         asyncio.create_task(self._run_wlk())
+
+    def _build_personality_prompt(self) -> str:
+        """Build a prompt with personality names so Whisper recognizes them."""
+        names = []
+        personalities_dir = Path.home() / ".claude-talk/personalities"
+        if personalities_dir.exists():
+            for f in personalities_dir.glob("*.md"):
+                content = f.read_text()
+                for line in content.splitlines():
+                    if line.strip().startswith("- Name:"):
+                        name = line.split(":", 1)[1].strip()
+                        names.append(name)
+                        break
+        if names:
+            prompt = "Personalities: " + ", ".join(names) + "."
+            print(f"[WLK] init prompt: {prompt}")
+            return prompt
+        return ""
 
     async def _run_wlk(self):
         """Auto-restart loop for WLK"""
         wlk_bin = self.venv_path / "bin/wlk"
         while not self.stop_requested:
             print(f"[WLK] starting on port {self.port}...", file=sys.stderr, flush=True)
+            cmd = [
+                str(wlk_bin),
+                "--model",
+                self.config.get("WLK_MODEL", "small.en"),
+                "--language",
+                "en",
+                "--backend",
+                "mlx-whisper",
+                "--port",
+                str(self.port),
+                "--pcm-input",
+            ]
+            if self._init_prompt:
+                cmd.extend(["--static-init-prompt", self._init_prompt])
             self.process = subprocess.Popen(
-                [
-                    str(wlk_bin),
-                    "--model",
-                    "small.en",
-                    "--language",
-                    "en",
-                    "--backend",
-                    "mlx-whisper",
-                    "--port",
-                    str(self.port),
-                    "--pcm-input",
-                ],
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
@@ -1024,9 +1048,12 @@ async def _global_listener():
                     if not filtered or filtered == "(silence)":
                         continue
                     text = filtered
+            print(f"[LISTENER] routing: '{text[:60]}'", file=sys.stderr, flush=True)
             send_transcription_to_claude(text)
         except Exception as e:
+            import traceback
             print(f"[LISTENER] Error (retrying): {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
             await asyncio.sleep(2)
 
 
