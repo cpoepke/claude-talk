@@ -21,7 +21,7 @@ All processing is local except the Claude API call.
 ## CLI
 
 `claude-talk` binary (installed via `pip install -e .` into WLK venv):
-- `claude-talk server start|stop|status` - Audio server lifecycle
+- `claude-talk server start|stop|status|speak|set-voice|volume|volume-up|volume-down|mute|unmute` - Audio server lifecycle & controls
 - `claude-talk session register` - Register current session for tmux routing (reads env/files, no args)
 - `claude-talk session claim|claim-active|release|activate|is-active|list|active` - Session management (SQLite-backed)
 - `claude-talk session update-personality|get-personality|set-tmux-target` - Per-session metadata

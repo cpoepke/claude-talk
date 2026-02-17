@@ -1,6 +1,6 @@
 ---
 name: chat
-description: Quick single voice exchange. Captures one utterance and responds via TTS. No persistent session needed.
+description: Quick single voice exchange. Speaks a prompt, captures one response via TTS. No persistent session needed.
 disable-model-invocation: true
 ---
 
@@ -20,21 +20,19 @@ The audio server must be running. If not, start it first by following the audio 
    ```
    If it fails, tell the user the audio server isn't running and they should start a voice chat session first with `/claude-talk:start`, or you can start the server for them.
 
-2. Capture one utterance (use Bash with timeout 60000):
+2. Speak a prompt asking the user their question (use Bash):
    ```bash
-   source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server listen --timeout 60
+   source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server speak "What can I help you with?"
    ```
-   This returns the transcribed text directly.
+   This speaks the prompt, captures the user's response, and routes it back via tmux.
 
-3. If text is empty, "(silence)", or "(muted)", tell the user no speech was detected.
+3. Wait for the transcription to arrive as a user message. Then respond conversationally.
 
-4. Otherwise, respond conversationally to what the user said. Keep the response natural and concise.
-
-5. Speak the response via TTS (use Bash):
+4. Speak the response via TTS (use Bash):
    ```bash
    source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server speak "<your response>"
    ```
 
-6. Show the exchange to the user:
+5. Show the exchange to the user:
    - "You said: <transcription>"
    - "Response: <your response>"

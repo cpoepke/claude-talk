@@ -232,61 +232,7 @@ def speak(text):
         kwargs: dict = {"text": text}
         if voice:
             kwargs["voice"] = voice
-        _server_request("tts", **kwargs)
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-@server.command("queue-speak")
-@click.argument("text")
-@click.argument("session_id")
-@click.option("--timeout", default=3600, help="Request timeout in seconds for response")
-def queue_speak(text, session_id, timeout):
-    """Queue TTS message with session's voice, then wait for response."""
-    from .db import DB
-    from .session import SessionStore
-
-    config = Config()
-
-    # Get session's voice from database
-    store = SessionStore(DB())
-    session_info = store.get_personality(session_id)
-    if not session_info:
-        click.echo(f"Error: Session {session_id} not found", err=True)
-        sys.exit(1)
-
-    voice = session_info.get("voice") or config.get("VOICE", "Daniel")
-
-    try:
-        r = _server_request("queue_speak", text=text, voice=voice, session_id=session_id)
-        click.echo(f"Queued (position: {r.get('queue_size', '?')})", err=True)
-
-        r = _server_request("queue_response", session_id=session_id, timeout=timeout)
-        click.echo(json.dumps(r))
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-@server.command("listen")
-@click.option("--timeout", default=3600, help="Request timeout in seconds")
-def listen(timeout):
-    """Listen for user speech (blocking)."""
-    try:
-        r = _server_request("listen", timeout=timeout)
-        click.echo(json.dumps(r))
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
-        sys.exit(1)
-
-
-@server.command("queue-listen")
-def queue_listen():
-    """Queue a background listen operation."""
-    try:
-        _server_request("queue_listen")
-        click.echo("Queued")
+        _server_request("speak", **kwargs)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

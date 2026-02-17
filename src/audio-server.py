@@ -6,13 +6,7 @@ Raw asyncio Unix socket server for local IPC. JSON-lines protocol.
 
 Commands:
   status              - Current state (idle/listening/speaking)
-  speak               - TTS + capture in one call (with interrupt)
-  listen              - Block until user speaks, return transcription
-  tts                 - Fire-and-forget TTS with background capture
-  queue_listen        - Start background listen
-  queue_speak         - Queue TTS for sequential playback
-  queue_response      - Get queued response for session
-  queue_status        - Queue processor status
+  speak               - Fire-and-forget TTS with background capture + continuous listen
   voice               - Change TTS voice
   volume              - Get system volume
   volume_up           - Increase volume by 10%
@@ -375,10 +369,6 @@ class AudioEngine:
         # Track last TTS text for echo filtering in continuous listen
         self._last_tts_text: str = ""
 
-        # Buffered listen: pre-captured text from /queue-listen
-        self._buffered_text: str | None = None
-        self._buffer_task: asyncio.Task | None = None
-
         print(f"AudioEngine initialized:")
         print(f"  Mic device: {self.device_index}, gain: {self.gain}")
         print(f"  TTS voice: {self.voice}")
@@ -423,89 +413,8 @@ class AudioEngine:
             print(f"TTS failed: {e}", file=sys.stderr)
             return None
 
-    async def listen(self) -> str:
-        """
-        Capture one utterance. Returns transcribed text or "(muted)"/"(silence)".
-        """
-        async with self.lock:
-            if self._is_muted():
-                return "(muted)"
-
-            self.state.set(STATUS="listening")
-            try:
-                text = await self._capture_utterance()
-                return text if text else "(silence)"
-            finally:
-                self.state.set(STATUS="idle")
-
-    async def queue_listen(self):
-        """Start capturing in background. Result stored in _buffered_text."""
-        await self._cancel_buffer()
-        self._buffered_text = None
-        self._buffer_task = asyncio.create_task(self._run_buffered_listen())
-
-    async def _run_buffered_listen(self):
-        """Background capture task — stores result in _buffered_text."""
-        try:
-            async with self.lock:
-                if self._is_muted():
-                    self._buffered_text = "(muted)"
-                    return
-                self.state.set(STATUS="listening")
-                self.logger.log_event("BUFFER_LISTEN_START")
-                try:
-                    text = await self._capture_utterance()
-                    self._buffered_text = text if text else "(silence)"
-                    self.logger.log_event("BUFFER_LISTEN_END", {"text": self._buffered_text})
-                finally:
-                    self.state.set(STATUS="idle")
-        except asyncio.CancelledError:
-            self.logger.log_event("BUFFER_LISTEN_CANCELLED")
-
-    async def _cancel_buffer(self):
-        """Cancel any running buffer task."""
-        if self._buffer_task and not self._buffer_task.done():
-            self._buffer_task.cancel()
-            try:
-                await self._buffer_task
-            except asyncio.CancelledError:
-                pass
-            self._buffer_task = None
-
-    def drain_buffer(self) -> str | None:
-        """Return buffered text if available, clearing it."""
-        if self._buffered_text is not None:
-            text = self._buffered_text
-            self._buffered_text = None
-            self._buffer_task = None
-            return text
-        if self._buffer_task and self._buffer_task.done():
-            self._buffer_task = None
-        return None
-
     async def speak_and_listen(self, text: str) -> str:
-        """
-        Speak text, then capture utterance (with interrupt if enabled).
-        Checks buffer first — if user already spoke during the gap, just speak and return that.
-        """
-        buffered = self.drain_buffer()
-        if buffered and buffered not in ("(silence)", "(muted)"):
-            self.logger.log_event("BUFFER_HIT", {"buffered_text": buffered})
-            # User already spoke — just do TTS, no capture needed
-            pid = await self.speak(text)
-            if pid:
-                while True:
-                    try:
-                        os.kill(pid, 0)
-                        await asyncio.sleep(0.1)
-                    except ProcessLookupError:
-                        break
-            self.state.set(STATUS="idle")
-            return buffered
-
-        # Cancel any stale buffer task before acquiring lock
-        await self._cancel_buffer()
-
+        """Speak text, then capture utterance (with interrupt if enabled)."""
         async with self.lock:
             if self._is_muted():
                 # Still speak, but don't capture
@@ -1084,8 +993,6 @@ db = DB()
 session_store = SessionStore(db)
 
 # Message queue (initialized in server_main)
-message_queue: asyncio.Queue | None = None
-queue_processor_task: asyncio.Task | None = None
 
 # Session ref counting for auto-shutdown
 _session_connections: set[asyncio.StreamWriter] = set()
@@ -1116,52 +1023,6 @@ def send_transcription_to_claude(text: str) -> None:
             print(f"[TMUX] {route_type} -> {tmux_target}: {cleaned_text}", file=sys.stderr)
         else:
             print(f"[TMUX] Failed to send to {tmux_target}", file=sys.stderr)
-
-
-async def process_message_queue():
-    """Background task that processes queued TTS messages sequentially."""
-    global message_queue
-    event_logger.log_event("QUEUE_PROCESSOR_START")
-
-    while True:
-        try:
-            msg = await message_queue.get()
-
-            if msg is None:  # Shutdown signal
-                event_logger.log_event("QUEUE_PROCESSOR_STOP")
-                break
-
-            text, voice, session_id = msg["text"], msg["voice"], msg["session_id"]
-            event_logger.log_event("QUEUE_PROCESS_START", {
-                "session_id": session_id,
-                "voice": voice,
-                "text": text[:50]
-            })
-
-            original_voice = audio_engine.voice
-            audio_engine.voice = voice
-
-            try:
-                response = await audio_engine.speak_and_listen(text)
-                event_logger.log_event("QUEUE_PROCESS_END", {
-                    "session_id": session_id,
-                    "response": response[:50] if response else ""
-                })
-
-                response_value = response if response else "(silence)"
-                state.set(**{f"RESPONSE_{session_id}": response_value, f"READY_{session_id}": "true"})
-
-            finally:
-                audio_engine.voice = original_voice
-
-            message_queue.task_done()
-
-        except asyncio.CancelledError:
-            event_logger.log_event("QUEUE_PROCESSOR_CANCELLED")
-            break
-        except Exception as e:
-            event_logger.log_event("QUEUE_PROCESSOR_ERROR", {"error": str(e)})
-            message_queue.task_done()
 
 
 async def _continuous_listen(last_tts_text: str = ""):
@@ -1246,41 +1107,8 @@ async def handle_status(params: dict) -> dict:
     }
 
 
-async def handle_listen(params: dict) -> dict:
-    event_logger.log_event("API_LISTEN_START")
-    text = await audio_engine.listen()
-    event_logger.log_event("API_LISTEN_END", {"text": text})
-    try:
-        send_transcription_to_claude(text)
-    except Exception as e:
-        print(f"[ERROR] Routing failed: {e}", file=sys.stderr, flush=True)
-    return {"ok": True, "text": text}
-
-
-async def handle_queue_listen(params: dict) -> dict:
-    event_logger.log_event("API_QUEUE_LISTEN")
-    await audio_engine.queue_listen()
-    return {"ok": True, "status": "ok"}
-
-
 async def handle_speak(params: dict) -> dict:
-    text = params.get("text", "")
-    if not text:
-        return {"ok": False, "error": "text is required"}
-    voice = params.get("voice")
-    if voice:
-        audio_engine.voice = voice
-    event_logger.log_event("API_SPEAK_START", {"text": text})
-    result = await audio_engine.speak_and_listen(text)
-    event_logger.log_event("API_SPEAK_END", {"text": result})
-    try:
-        send_transcription_to_claude(result)
-    except Exception as e:
-        print(f"[ERROR] Routing failed: {e}", file=sys.stderr, flush=True)
-    return {"ok": True, "text": result}
-
-
-async def handle_tts(params: dict) -> dict:
+    """Fire-and-forget TTS: speaks text, captures response, routes via tmux, then continuous listen."""
     text = params.get("text", "")
     if not text:
         return {"ok": False, "error": "text is required"}
@@ -1303,44 +1131,6 @@ async def handle_tts(params: dict) -> dict:
 
     asyncio.create_task(_speak_and_route(original_voice))
     return {"ok": True, "status": "speaking"}
-
-
-async def handle_queue_speak(params: dict) -> dict:
-    text = params.get("text", "")
-    voice = params.get("voice", "")
-    session_id = params.get("session_id", "")
-    if not text or not voice or not session_id:
-        return {"ok": False, "error": "text, voice, and session_id are required"}
-    if message_queue is None:
-        return {"ok": False, "error": "Message queue not initialized"}
-    event_logger.log_event("API_QUEUE_SPEAK", {
-        "session_id": session_id, "voice": voice, "text": text[:50]
-    })
-    await message_queue.put({"text": text, "voice": voice, "session_id": session_id})
-    return {"ok": True, "status": "queued", "queue_size": message_queue.qsize()}
-
-
-async def handle_queue_response(params: dict) -> dict:
-    session_id = params.get("session_id", "")
-    if not session_id:
-        return {"ok": False, "error": "session_id is required"}
-    ready_key = f"READY_{session_id}"
-    response_key = f"RESPONSE_{session_id}"
-    for _ in range(3600):
-        if state.get(ready_key) == "true":
-            response = state.get(response_key) or "(silence)"
-            state.set(**{ready_key: "", response_key: ""})
-            return {"ok": True, "text": response}
-        await asyncio.sleep(1)
-    return {"ok": True, "text": "(timeout)"}
-
-
-async def handle_queue_status(params: dict) -> dict:
-    return {
-        "ok": True,
-        "queue_size": message_queue.qsize() if message_queue else 0,
-        "processor_running": queue_processor_task is not None and not queue_processor_task.done(),
-    }
 
 
 async def handle_voice(params: dict) -> dict:
@@ -1416,13 +1206,7 @@ async def _delayed_exit():
 # Command dispatch table
 COMMANDS: dict[str, Any] = {
     "status": handle_status,
-    "listen": handle_listen,
-    "queue_listen": handle_queue_listen,
     "speak": handle_speak,
-    "tts": handle_tts,
-    "queue_speak": handle_queue_speak,
-    "queue_response": handle_queue_response,
-    "queue_status": handle_queue_status,
     "voice": handle_voice,
     "volume": handle_volume,
     "volume_up": handle_volume_up,
@@ -1540,9 +1324,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
 
 async def server_main():
-    """Async main: start WLK, queue processor, and Unix socket server."""
-    global message_queue, queue_processor_task
-
+    """Async main: start WLK and Unix socket server."""
     import socket as _socket
 
     socket_path = Path.home() / ".claude-talk/audio-server.sock"
@@ -1550,7 +1332,6 @@ async def server_main():
     if socket_path.exists():
         socket_path.unlink()
 
-    message_queue = asyncio.Queue()
     state.set(SESSION="active", STATUS="idle", MUTED="false")
 
     # Start WLK
@@ -1568,10 +1349,6 @@ async def server_main():
         except (asyncio.TimeoutError, OSError):
             await asyncio.sleep(1)
 
-    # Start message queue processor
-    queue_processor_task = asyncio.create_task(process_message_queue())
-    print("Message queue processor started")
-
     # Create Unix socket with restrictive permissions
     sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
     sock.bind(str(socket_path))
@@ -1585,12 +1362,6 @@ async def server_main():
         await server.serve_forever()
     finally:
         server.close()
-        if queue_processor_task:
-            await message_queue.put(None)
-            try:
-                await asyncio.wait_for(queue_processor_task, timeout=5.0)
-            except asyncio.TimeoutError:
-                queue_processor_task.cancel()
         await wlk_manager.stop()
         state.set(SESSION="stopped")
         event_logger.close()
