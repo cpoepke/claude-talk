@@ -54,7 +54,7 @@ All processing is local except the Claude API call.
 ## Key paths
 
 - `src/claude_talk/` - Python package (config, db, session, personality, devices, voices, cli)
-- `src/audio-server.py` - Audio server (TTS, capture, barge-in, WLK)
+- `src/audio-server.py` - Audio server (TTS, capture, interrupt mode, WLK)
 - `.claude/hooks/session-track.sh` - UserPromptSubmit hook (writes CLAUDE_SESSION_ID to current-session file)
 - `.claude/settings.json` - Registers hooks
 - `config/defaults.env` - Default configuration

@@ -62,16 +62,16 @@ if [[ -f "$STATE_FILE" ]]; then
         fi
 
         # Server fields — default "--" when server unreachable
-        BARGE_DISPLAY="\033[90mbarge:--\033[0m"
+        BARGE_DISPLAY="\033[90m⚡interrupt:--\033[0m"
         VOL_DISPLAY="\033[90mvol:--\033[0m"
         SERVER_JSON=$(source "$HOME/.claude-talk/venvs/wlk/bin/activate" && claude-talk server status --json 2>/dev/null || echo "")
         if [[ -n "$SERVER_JSON" ]] && echo "$SERVER_JSON" | jq -e . >/dev/null 2>&1; then
             BARGE=$(echo "$SERVER_JSON" | jq -r 'if .barge_in == null then "" else (.barge_in | tostring) end' 2>/dev/null || echo "")
             VOLUME=$(echo "$SERVER_JSON" | jq -r '.volume // empty' 2>/dev/null || echo "")
             if [[ "$BARGE" == "true" ]]; then
-                BARGE_DISPLAY="\033[32mbarge:on\033[0m"
+                BARGE_DISPLAY="\033[33m⚡interrupt:on\033[0m"
             elif [[ "$BARGE" == "false" ]]; then
-                BARGE_DISPLAY="\033[90mbarge:off\033[0m"
+                BARGE_DISPLAY="\033[90m⚡interrupt:off\033[0m"
             fi
             [[ -n "$VOLUME" ]] && VOL_DISPLAY="\033[37mvol:${VOLUME}%\033[0m"
         fi
