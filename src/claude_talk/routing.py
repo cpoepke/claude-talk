@@ -12,7 +12,7 @@ BROADCAST_KEYWORDS = [
 ]
 
 
-def parse_route(text: str) -> tuple[str, str | None, str]:
+def parse_route(text: str, store: SessionStore | None = None) -> tuple[str, str | None, str]:
     """Parse transcription to determine routing.
 
     Returns:
@@ -33,7 +33,8 @@ def parse_route(text: str) -> tuple[str, str | None, str]:
             return ("broadcast", None, cleaned or text)
 
     # Check for personality names
-    store = SessionStore(DB())
+    if store is None:
+        store = SessionStore(DB())
     sessions = store.list_sessions()
 
     for session in sessions:
@@ -56,7 +57,7 @@ def parse_route(text: str) -> tuple[str, str | None, str]:
     return ("primary", None, text)
 
 
-def get_target_sessions(route_type: str, target_session_id: str | None) -> list[str]:
+def get_target_sessions(route_type: str, target_session_id: str | None, store: SessionStore | None = None) -> list[str]:
     """Get list of session IDs to route message to.
 
     Args:
@@ -66,7 +67,8 @@ def get_target_sessions(route_type: str, target_session_id: str | None) -> list[
     Returns:
         List of session_ids to send message to
     """
-    store = SessionStore(DB())
+    if store is None:
+        store = SessionStore(DB())
 
     if route_type == "broadcast":
         # Send to all active sessions with valid IDs

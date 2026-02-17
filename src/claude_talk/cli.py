@@ -2,7 +2,7 @@
 
 import json
 import os
-import signal
+import socket
 import subprocess
 import sys
 import time
@@ -21,25 +21,32 @@ def cli():
     """Claude Talk — voice conversation plugin for Claude Code."""
 
 
-# ── Server IPC (Unix socket) ──────────────────────────────────────────────────
+# ── Server IPC (Unix socket, JSON-lines protocol) ────────────────────────────
 
 _SOCKET_PATH = Path.home() / ".claude-talk/audio-server.sock"
 
 
-def _server_get(path: str, timeout: float = 5.0):
-    """GET request to audio server via Unix socket."""
-    import httpx
-    transport = httpx.HTTPTransport(uds=str(_SOCKET_PATH))
-    with httpx.Client(transport=transport, timeout=timeout) as client:
-        return client.get(f"http://localhost{path}")
+def _server_request(cmd: str, timeout: float = 5.0, **params) -> dict:
+    """Send a JSON-line command to the audio server and return the response dict."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    try:
+        sock.connect(str(_SOCKET_PATH))
+        msg = {"cmd": cmd, **params}
+        sock.sendall(json.dumps(msg).encode() + b"\n")
+        # Read response line
+        buf = b""
+        while b"\n" not in buf:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        if not buf:
+            raise ConnectionError("No response from server")
+        return json.loads(buf.split(b"\n", 1)[0])
+    finally:
+        sock.close()
 
-
-def _server_post(path: str, data: dict | None = None, timeout: float = 5.0):
-    """POST request to audio server via Unix socket."""
-    import httpx
-    transport = httpx.HTTPTransport(uds=str(_SOCKET_PATH))
-    with httpx.Client(transport=transport, timeout=timeout) as client:
-        return client.post(f"http://localhost{path}", json=data or {})
 
 
 # ── Server commands ──────────────────────────────────────────────────────────
@@ -84,6 +91,20 @@ def start(spawn_teammates, personalities):
             # Spawn all personalities
             manager.spawn_all_personalities()
 
+    # Reuse existing server if it's already running
+    try:
+        _server_request("status", timeout=1)
+        click.echo("Audio server ready")
+        return
+    except Exception:
+        pass
+
+    # No server running — clean up any stale processes/socket
+    subprocess.run(["pkill", "-f", "audio-server.py"], capture_output=True)
+    time.sleep(0.3)
+    if _SOCKET_PATH.exists():
+        _SOCKET_PATH.unlink()
+
     # Start in background using the venv's python
     python = Path(wlk_venv) / "bin/python3"
     log_path = Path.home() / ".claude-talk/audio-server-stderr.log"
@@ -99,7 +120,7 @@ def start(spawn_teammates, personalities):
     # Wait for readiness (poll Unix socket)
     for _ in range(15):
         try:
-            _server_get("/status", timeout=1)
+            _server_request("status", timeout=1)
             click.echo("Audio server ready")
             return
         except Exception:
@@ -111,9 +132,15 @@ def start(spawn_teammates, personalities):
 
 @server.command()
 def stop():
-    """Stop the audio server."""
+    """Stop the audio server. Only stops if no active sessions remain."""
+    store = SessionStore(DB())
+    active = [s for s in store.list_sessions() if s["status"] == "active"]
+    if active:
+        click.echo(f"Audio server still needed by {len(active)} active session(s), skipping stop")
+        return
     try:
-        _server_post("/stop")
+        _server_request("stop")
+        click.echo("Audio server stopped")
     except Exception:
         pass
 
@@ -123,9 +150,9 @@ def stop():
 def status(output_json):
     """Check if the audio server is running. With --json, output full status."""
     try:
-        r = _server_get("/status", timeout=2)
+        r = _server_request("status", timeout=2)
         if output_json:
-            click.echo(r.text)
+            click.echo(json.dumps(r))
         else:
             click.echo("running")
     except Exception:
@@ -139,8 +166,8 @@ def status(output_json):
 def set_voice(voice):
     """Set the TTS voice on the audio server."""
     try:
-        r = _server_post("/voice", {"voice": voice}, timeout=2)
-        click.echo(r.text)
+        r = _server_request("voice", voice=voice, timeout=2)
+        click.echo(json.dumps(r))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -150,20 +177,22 @@ def set_voice(voice):
 @click.argument("text")
 def speak(text):
     """Speak text via TTS using the current session's voice (fire-and-forget)."""
-    # Look up voice for the current session so each personality sounds like themselves
+    # Look up voice for the current pane's session
     voice = None
-    current_session_file = Path.home() / ".claude-talk/current-session"
-    if current_session_file.exists():
-        session_id = current_session_file.read_text().strip()
-        if session_id:
-            info = SessionStore(DB()).get_personality(session_id)
-            if info:
-                voice = info.get("voice")
+    tmux_pane = os.environ.get("TMUX_PANE", "").strip()
+    if tmux_pane:
+        pane_file = Path.home() / ".claude-talk/sessions" / tmux_pane.replace("%", "pane-")
+        if pane_file.exists():
+            session_id = pane_file.read_text().strip()
+            if session_id:
+                info = SessionStore(DB()).get_personality(session_id)
+                if info:
+                    voice = info.get("voice")
     try:
-        payload: dict = {"text": text}
+        kwargs: dict = {"text": text}
         if voice:
-            payload["voice"] = voice
-        _server_post("/tts", payload)
+            kwargs["voice"] = voice
+        _server_request("tts", **kwargs)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -190,12 +219,11 @@ def queue_speak(text, session_id, timeout):
     voice = session_info.get("voice") or config.get("VOICE", "Daniel")
 
     try:
-        r = _server_post("/queue-speak", {"text": text, "voice": voice, "session_id": session_id})
-        queue_result = r.json()
-        click.echo(f"Queued (position: {queue_result.get('queue_size', '?')})", err=True)
+        r = _server_request("queue_speak", text=text, voice=voice, session_id=session_id)
+        click.echo(f"Queued (position: {r.get('queue_size', '?')})", err=True)
 
-        r = _server_get(f"/queue-response/{session_id}", timeout=timeout)
-        click.echo(r.text)
+        r = _server_request("queue_response", session_id=session_id, timeout=timeout)
+        click.echo(json.dumps(r))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -206,8 +234,8 @@ def queue_speak(text, session_id, timeout):
 def listen(timeout):
     """Listen for user speech (blocking)."""
     try:
-        r = _server_get("/listen", timeout=timeout)
-        click.echo(r.text)
+        r = _server_request("listen", timeout=timeout)
+        click.echo(json.dumps(r))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -217,7 +245,7 @@ def listen(timeout):
 def queue_listen():
     """Queue a background listen operation."""
     try:
-        _server_post("/queue-listen")
+        _server_request("queue_listen")
         click.echo("Queued")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -228,8 +256,8 @@ def queue_listen():
 def get_volume():
     """Get current system volume (0-100)."""
     try:
-        r = _server_get("/volume", timeout=2)
-        click.echo(r.json().get("volume", 50))
+        r = _server_request("volume", timeout=2)
+        click.echo(r.get("volume", 50))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -239,8 +267,8 @@ def get_volume():
 def volume_up():
     """Increase system volume by 10%."""
     try:
-        r = _server_post("/volume/up", timeout=2)
-        click.echo(r.json().get("volume", 50))
+        r = _server_request("volume_up", timeout=2)
+        click.echo(r.get("volume", 50))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -250,8 +278,8 @@ def volume_up():
 def volume_down():
     """Decrease system volume by 10%."""
     try:
-        r = _server_post("/volume/down", timeout=2)
-        click.echo(r.json().get("volume", 50))
+        r = _server_request("volume_down", timeout=2)
+        click.echo(r.get("volume", 50))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -336,6 +364,43 @@ def release(session_id):
     click.echo(f"Session {session_id} released", err=True)
 
 
+@session.command("release-current")
+def release_current():
+    """Release the current session and stop server if no others active."""
+    session_id = None
+    tmux_pane = os.environ.get("TMUX_PANE", "").strip()
+    pane_file = None
+    if tmux_pane:
+        pane_file = Path.home() / ".claude-talk/sessions" / tmux_pane.replace("%", "pane-")
+        if pane_file.exists():
+            session_id = pane_file.read_text().strip()
+    if not session_id:
+        click.echo("No session ID found", err=True)
+        sys.exit(1)
+
+    store = _get_store()
+    store.release(session_id)
+    click.echo(f"Session {session_id[:8]}... released", err=True)
+
+    # Clean up per-pane file
+    if pane_file and pane_file.exists():
+        pane_file.unlink()
+
+    # Clear legacy state file
+    state_file = Path.home() / ".claude-talk/state"
+    if state_file.exists():
+        state_file.write_text("SESSION=stopped\n")
+
+    # Stop server if no other active sessions remain
+    remaining = [s for s in store.list_sessions() if s["status"] == "active"]
+    if not remaining:
+        try:
+            _server_request("stop", timeout=2.0)
+            click.echo("Server stopped (no active sessions)", err=True)
+        except Exception:
+            pass
+
+
 @session.command("activate")
 @click.argument("session_id")
 def activate(session_id):
@@ -352,33 +417,44 @@ def activate(session_id):
 
 
 @session.command("register")
-def register():
-    """Register the current session for tmux routing (reads env/files, no args needed).
+@click.option("--personality", default=None, help="Override personality name (default: read from active-personality file)")
+def register(personality):
+    """Register the current session for tmux routing.
 
     Reads session ID from ~/.claude-talk/current-session (written by UserPromptSubmit hook),
-    tmux pane from $TMUX_PANE, personality from ~/.claude-talk/active-personality.
+    tmux pane from $TMUX_PANE. Personality from --personality flag or ~/.claude-talk/active-personality.
     Claims/activates the session and sets tmux target + personality.
     """
-    # Get session ID
-    current_session_file = Path.home() / ".claude-talk/current-session"
+    # Get session ID: per-pane file > generate new UUID
+    tmux_pane = os.environ.get("TMUX_PANE", "").strip()
     session_id = None
-    if current_session_file.exists():
-        session_id = current_session_file.read_text().strip()
+    pane_file = None
+    if tmux_pane:
+        sessions_dir = Path.home() / ".claude-talk/sessions"
+        sessions_dir.mkdir(parents=True, exist_ok=True)
+        pane_file = sessions_dir / tmux_pane.replace("%", "pane-")
+        if pane_file.exists():
+            session_id = pane_file.read_text().strip()
     if not session_id:
-        click.echo("Error: No current session ID found. Ensure UserPromptSubmit hook is configured.", err=True)
-        sys.exit(1)
+        import uuid
+        session_id = str(uuid.uuid4())
+        if pane_file:
+            pane_file.write_text(session_id)
 
     # Get tmux pane (already in %N format from tmux env)
     tmux_target = os.environ.get("TMUX_PANE", "").strip()
     if not tmux_target:
         click.echo("Error: Not running in tmux ($TMUX_PANE not set).", err=True)
+        click.echo("Voice chat requires tmux. Start Claude Code inside a tmux session:", err=True)
+        click.echo("  tmux new-session && claude", err=True)
         sys.exit(1)
 
-    # Get personality
-    active_personality_file = Path.home() / ".claude-talk/active-personality"
-    personality = "claude"
-    if active_personality_file.exists():
-        personality = active_personality_file.read_text().strip() or "claude"
+    # Get personality (flag > file > default)
+    if not personality:
+        active_personality_file = Path.home() / ".claude-talk/active-personality"
+        personality = "claude"
+        if active_personality_file.exists():
+            personality = active_personality_file.read_text().strip() or "claude"
 
     # Get voice from personality template
     voice = None
@@ -410,9 +486,38 @@ def register():
             store.release(s["session_id"])
             click.echo(f"Released stale session {s['session_id'][:8]}... (pane {stale_target} gone)", err=True)
 
-    # Claim/activate session as primary and set tmux target
-    store.claim(session_id, personality, voice, is_primary=True)
+    # Auto-detect primary: first active session is primary, subsequent ones aren't
+    has_primary = any(
+        s["status"] == "active" and s.get("is_primary") and s["session_id"] != session_id
+        for s in store.list_sessions()
+    )
+    is_primary = not has_primary
+    store.claim(session_id, personality, voice, is_primary=is_primary)
     store.set_tmux_target(session_id, tmux_target)
+
+    # Open persistent connection to server for ref counting (background thread)
+    import threading
+
+    def _hold_session_connection():
+        """Hold a persistent socket connection to the audio server.
+        When this process exits, the OS closes the socket automatically,
+        letting the server detect the disconnect for ref counting."""
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.connect(str(_SOCKET_PATH))
+            msg = {"cmd": "session_connect", "session_id": session_id}
+            sock.sendall(json.dumps(msg).encode() + b"\n")
+            # Read ack
+            sock.recv(4096)
+            # Block forever — socket stays open until process exits
+            while True:
+                time.sleep(3600)
+        except Exception:
+            pass
+
+    t = threading.Thread(target=_hold_session_connection, daemon=True)
+    t.start()
+
     click.echo(f"Registered: {session_id[:8]}... -> {tmux_target} (personality: {personality})")
 
 
@@ -755,15 +860,31 @@ def show(session_id):
 @click.argument("session_id", required=False)
 @click.option("--color", is_flag=True, help="Output color code for statusline")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON")
-def personality_display(session_id, color, output_json):
+@click.option("--pane", default=None, help="Look up session by tmux pane ID (e.g., %0)")
+def personality_display(session_id, color, output_json, pane):
     """Show personality display name for a session (for statusline)."""
     from .personality import load_session_personality
     from .db import DB
     from .session import SessionStore
     import json as json_lib
 
-    # Get session
-    if not session_id:
+    # Get session: --pane > session_id arg > primary
+    if pane:
+        # Try per-pane file first, then DB lookup by tmux_target
+        pane_file = Path.home() / ".claude-talk/sessions" / pane.replace("%", "pane-")
+        if pane_file.exists():
+            session_id = pane_file.read_text().strip()
+        else:
+            # Look up by tmux_target in DB
+            store = SessionStore(DB())
+            for s in store.list_sessions():
+                if s["status"] == "active" and s.get("tmux_target") == pane:
+                    session_id = s["session_id"]
+                    break
+            if not session_id:
+                click.echo("(none)", err=True)
+                sys.exit(1)
+    elif not session_id:
         store = SessionStore(DB())
         session_id = store.get_primary()
         if not session_id:

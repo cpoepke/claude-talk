@@ -2,21 +2,26 @@
 """
 Audio Server for Claude Talk
 
-Replaces shell scripts + agent with a dedicated HTTP server that handles:
-- TTS playback (macOS `say`)
-- Speech capture via WhisperLiveKit
-- Interrupt detection (Speex AEC + BlackHole)
-- State management
-- WLK subprocess lifecycle
+Raw asyncio Unix socket server for local IPC. JSON-lines protocol.
 
-API:
-  POST /speak               - TTS + capture in one call (with interrupt)
-  GET  /listen              - Block until user speaks, return transcription
-  GET  /status              - Current state (idle/listening/speaking)
-  GET  /devices             - List audio devices and active input
-  POST /mute                - Mute mic
-  POST /unmute              - Unmute mic
-  POST /stop                - Graceful shutdown
+Commands:
+  status              - Current state (idle/listening/speaking)
+  speak               - TTS + capture in one call (with interrupt)
+  listen              - Block until user speaks, return transcription
+  tts                 - Fire-and-forget TTS with background capture
+  queue_listen        - Start background listen
+  queue_speak         - Queue TTS for sequential playback
+  queue_response      - Get queued response for session
+  queue_status        - Queue processor status
+  voice               - Change TTS voice
+  volume              - Get system volume
+  volume_up           - Increase volume by 10%
+  volume_down         - Decrease volume by 10%
+  mute                - Mute mic
+  unmute              - Unmute mic
+  devices             - List audio devices
+  session_connect     - Persistent session connection (ref counting)
+  stop                - Graceful shutdown
 """
 
 import asyncio
@@ -27,17 +32,13 @@ import signal
 import subprocess
 import sys
 import time
-from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import sounddevice as sd
-import uvicorn
 import websockets
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 
 # Claude Talk modules
 sys.path.insert(0, str(Path(__file__).parent))
@@ -1057,37 +1058,8 @@ class AudioEngine:
 
 
 # ============================================================================
-# FastAPI Server
+# Socket Server
 # ============================================================================
-
-
-class SpeakRequest(BaseModel):
-    text: str
-    voice: str | None = None  # Optional: override server voice for this request
-
-
-class QueueSpeakRequest(BaseModel):
-    text: str
-    voice: str
-    session_id: str
-
-
-class StatusResponse(BaseModel):
-    state: str
-    muted: bool
-    input_device: str = ""
-    input_device_index: int = -1
-    output_device: str = ""
-    output_device_index: int = -1
-    barge_in: bool = False
-    blackhole_device: int | None = None
-    auto_device: bool = False
-    voice: str = ""
-    volume: int = 50
-
-
-class TextResponse(BaseModel):
-    text: str
 
 
 # Global instances
@@ -1101,6 +1073,14 @@ wlk_manager = WLKManager(config)
 # Session management for tmux routing
 db = DB()
 session_store = SessionStore(db)
+
+# Message queue (initialized in server_main)
+message_queue: asyncio.Queue | None = None
+queue_processor_task: asyncio.Task | None = None
+
+# Session ref counting for auto-shutdown
+_session_connections: set[asyncio.StreamWriter] = set()
+_auto_shutdown_task: asyncio.Task | None = None
 
 
 def send_transcription_to_claude(text: str) -> None:
@@ -1128,10 +1108,6 @@ def send_transcription_to_claude(text: str) -> None:
         else:
             print(f"[TMUX] Failed to send to {tmux_target}", file=sys.stderr)
 
-# Message queue for multi-session voice handling (initialized in lifespan)
-message_queue = None
-queue_processor_task = None
-
 
 async def process_message_queue():
     """Background task that processes queued TTS messages sequentially."""
@@ -1140,7 +1116,6 @@ async def process_message_queue():
 
     while True:
         try:
-            # Get next message from queue (blocks until available)
             msg = await message_queue.get()
 
             if msg is None:  # Shutdown signal
@@ -1154,11 +1129,9 @@ async def process_message_queue():
                 "text": text[:50]
             })
 
-            # Set voice for this message
             original_voice = audio_engine.voice
             audio_engine.voice = voice
 
-            # Speak and listen with interrupt
             try:
                 response = await audio_engine.speak_and_listen(text)
                 event_logger.log_event("QUEUE_PROCESS_END", {
@@ -1166,13 +1139,10 @@ async def process_message_queue():
                     "response": response[:50] if response else ""
                 })
 
-                # Store response for the session to retrieve
-                # Use a marker to indicate response is ready (even if empty)
                 response_value = response if response else "(silence)"
                 state.set(**{f"RESPONSE_{session_id}": response_value, f"READY_{session_id}": "true"})
 
             finally:
-                # Restore original voice
                 audio_engine.voice = original_voice
 
             message_queue.task_done()
@@ -1185,17 +1155,387 @@ async def process_message_queue():
             message_queue.task_done()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Startup and shutdown"""
-    global queue_processor_task, message_queue
+async def _continuous_listen():
+    """Keep listening and routing until silence/error."""
+    try:
+        while True:
+            audio_engine.state.set(STATUS="listening")
+            text = await audio_engine._capture_utterance()
+            if not text or text in ("(silence)", "(muted)", "(wlk_error)"):
+                continue
+            cleaned = text.strip()
+            if len(cleaned) < 3:
+                continue
+            send_transcription_to_claude(text)
+    except Exception as e:
+        print(f"[LISTEN] Error: {e}", file=sys.stderr, flush=True)
+    finally:
+        audio_engine.state.set(STATUS="idle")
 
-    # Initialize message queue in the event loop
+
+# ── Volume helpers ────────────────────────────────────────────────────────────
+
+
+async def _get_volume() -> dict[str, int]:
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "osascript", "-e", "output volume of (get volume settings)",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        volume = int(stdout.decode().strip())
+        return {"volume": volume}
+    except Exception:
+        return {"volume": 50}
+
+
+async def _set_volume(level: int) -> dict[str, int]:
+    try:
+        await asyncio.create_subprocess_exec(
+            "osascript", "-e", f"set volume output volume {level}",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return {"volume": level}
+    except Exception:
+        return await _get_volume()
+
+
+# ── Command handlers ──────────────────────────────────────────────────────────
+
+
+async def handle_status(params: dict) -> dict:
+    import sounddevice as sd
+    input_dev = sd.query_devices(audio_engine.device_index)
+    default_out = sd.default.device[1]
+    output_dev = sd.query_devices(int(default_out)) if default_out is not None else {}
+    volume_info = await _get_volume()
+    return {
+        "ok": True,
+        "state": state.get("STATUS", "idle"),
+        "muted": state.get("MUTED", "false") == "true",
+        "input_device": input_dev.get("name", "unknown"),
+        "input_device_index": audio_engine.device_index,
+        "output_device": output_dev.get("name", "unknown"),
+        "output_device_index": int(default_out) if default_out is not None else -1,
+        "barge_in": audio_engine.barge_in_enabled,
+        "blackhole_device": audio_engine.blackhole_device,
+        "auto_device": audio_engine._auto_device,
+        "voice": audio_engine.voice,
+        "volume": volume_info["volume"],
+    }
+
+
+async def handle_listen(params: dict) -> dict:
+    event_logger.log_event("API_LISTEN_START")
+    text = await audio_engine.listen()
+    event_logger.log_event("API_LISTEN_END", {"text": text})
+    try:
+        send_transcription_to_claude(text)
+    except Exception as e:
+        print(f"[ERROR] Routing failed: {e}", file=sys.stderr, flush=True)
+    return {"ok": True, "text": text}
+
+
+async def handle_queue_listen(params: dict) -> dict:
+    event_logger.log_event("API_QUEUE_LISTEN")
+    await audio_engine.queue_listen()
+    return {"ok": True, "status": "ok"}
+
+
+async def handle_speak(params: dict) -> dict:
+    text = params.get("text", "")
+    if not text:
+        return {"ok": False, "error": "text is required"}
+    voice = params.get("voice")
+    if voice:
+        audio_engine.voice = voice
+    event_logger.log_event("API_SPEAK_START", {"text": text})
+    result = await audio_engine.speak_and_listen(text)
+    event_logger.log_event("API_SPEAK_END", {"text": result})
+    try:
+        send_transcription_to_claude(result)
+    except Exception as e:
+        print(f"[ERROR] Routing failed: {e}", file=sys.stderr, flush=True)
+    return {"ok": True, "text": result}
+
+
+async def handle_tts(params: dict) -> dict:
+    text = params.get("text", "")
+    if not text:
+        return {"ok": False, "error": "text is required"}
+    voice = params.get("voice")
+    original_voice = audio_engine.voice
+    if voice:
+        audio_engine.voice = voice
+
+    async def _speak_and_route(voice_to_restore: str):
+        try:
+            event_logger.log_event("TTS_START", {"text": text, "voice": audio_engine.voice})
+            result = await audio_engine.speak_and_listen(text)
+            event_logger.log_event("TTS_END", {"text": result})
+            send_transcription_to_claude(result)
+        except Exception as e:
+            print(f"[TTS] Error: {e}", file=sys.stderr, flush=True)
+        finally:
+            audio_engine.voice = voice_to_restore
+            asyncio.create_task(_continuous_listen())
+
+    asyncio.create_task(_speak_and_route(original_voice))
+    return {"ok": True, "status": "speaking"}
+
+
+async def handle_queue_speak(params: dict) -> dict:
+    text = params.get("text", "")
+    voice = params.get("voice", "")
+    session_id = params.get("session_id", "")
+    if not text or not voice or not session_id:
+        return {"ok": False, "error": "text, voice, and session_id are required"}
+    if message_queue is None:
+        return {"ok": False, "error": "Message queue not initialized"}
+    event_logger.log_event("API_QUEUE_SPEAK", {
+        "session_id": session_id, "voice": voice, "text": text[:50]
+    })
+    await message_queue.put({"text": text, "voice": voice, "session_id": session_id})
+    return {"ok": True, "status": "queued", "queue_size": message_queue.qsize()}
+
+
+async def handle_queue_response(params: dict) -> dict:
+    session_id = params.get("session_id", "")
+    if not session_id:
+        return {"ok": False, "error": "session_id is required"}
+    ready_key = f"READY_{session_id}"
+    response_key = f"RESPONSE_{session_id}"
+    for _ in range(3600):
+        if state.get(ready_key) == "true":
+            response = state.get(response_key) or "(silence)"
+            state.set(**{ready_key: "", response_key: ""})
+            return {"ok": True, "text": response}
+        await asyncio.sleep(1)
+    return {"ok": True, "text": "(timeout)"}
+
+
+async def handle_queue_status(params: dict) -> dict:
+    return {
+        "ok": True,
+        "queue_size": message_queue.qsize() if message_queue else 0,
+        "processor_running": queue_processor_task is not None and not queue_processor_task.done(),
+    }
+
+
+async def handle_voice(params: dict) -> dict:
+    voice = params.get("voice", "")
+    if not voice:
+        return {"ok": False, "error": "voice is required"}
+    audio_engine.voice = voice
+    return {"ok": True, "voice": audio_engine.voice}
+
+
+async def handle_volume(params: dict) -> dict:
+    v = await _get_volume()
+    return {"ok": True, **v}
+
+
+async def handle_volume_up(params: dict) -> dict:
+    current = await _get_volume()
+    new_vol = min(100, current["volume"] + 10)
+    result = await _set_volume(new_vol)
+    return {"ok": True, **result}
+
+
+async def handle_volume_down(params: dict) -> dict:
+    current = await _get_volume()
+    new_vol = max(0, current["volume"] - 10)
+    result = await _set_volume(new_vol)
+    return {"ok": True, **result}
+
+
+async def handle_mute(params: dict) -> dict:
+    state.set(MUTED="true")
+    return {"ok": True, "status": "muted"}
+
+
+async def handle_unmute(params: dict) -> dict:
+    state.set(MUTED="false")
+    return {"ok": True, "status": "unmuted"}
+
+
+async def handle_devices(params: dict) -> dict:
+    devices = sd.query_devices()
+    device_list = []
+    for i, dev in enumerate(devices):
+        device_list.append({
+            "index": i,
+            "name": dev["name"],
+            "input_channels": dev["max_input_channels"],
+            "output_channels": dev["max_output_channels"],
+        })
+    default_in, default_out = sd.default.device
+    return {
+        "ok": True,
+        "devices": device_list,
+        "active_input": audio_engine.device_index,
+        "active_input_name": devices[audio_engine.device_index]["name"],
+        "default_input": int(default_in) if default_in is not None else None,
+        "default_output": int(default_out) if default_out is not None else None,
+    }
+
+
+async def handle_stop(params: dict) -> dict:
+    await wlk_manager.stop()
+    state.set(SESSION="stopped")
+    asyncio.create_task(_delayed_exit())
+    return {"ok": True, "status": "shutting down"}
+
+
+async def _delayed_exit():
+    await asyncio.sleep(1)
+    os._exit(0)
+
+
+# Command dispatch table
+COMMANDS: dict[str, Any] = {
+    "status": handle_status,
+    "listen": handle_listen,
+    "queue_listen": handle_queue_listen,
+    "speak": handle_speak,
+    "tts": handle_tts,
+    "queue_speak": handle_queue_speak,
+    "queue_response": handle_queue_response,
+    "queue_status": handle_queue_status,
+    "voice": handle_voice,
+    "volume": handle_volume,
+    "volume_up": handle_volume_up,
+    "volume_down": handle_volume_down,
+    "mute": handle_mute,
+    "unmute": handle_unmute,
+    "devices": handle_devices,
+    "stop": handle_stop,
+}
+
+
+# ── Session ref counting ─────────────────────────────────────────────────────
+
+
+async def _handle_session_connect(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, params: dict):
+    """Persistent session connection. Stays open until client disconnects."""
+    global _auto_shutdown_task
+
+    session_id = params.get("session_id", "unknown")
+    _session_connections.add(writer)
+    print(f"[SESSION] connected: {session_id[:8]}... (total: {len(_session_connections)})", file=sys.stderr, flush=True)
+
+    # Cancel pending auto-shutdown
+    if _auto_shutdown_task and not _auto_shutdown_task.done():
+        _auto_shutdown_task.cancel()
+        _auto_shutdown_task = None
+        print(f"[SESSION] auto-shutdown cancelled", file=sys.stderr, flush=True)
+
+    # Send ack
+    writer.write(json.dumps({"ok": True, "status": "connected"}).encode() + b"\n")
+    await writer.drain()
+
+    # Hold connection open — read until EOF
+    try:
+        while True:
+            data = await reader.read(4096)
+            if not data:
+                break
+    except (asyncio.CancelledError, ConnectionError):
+        pass
+    finally:
+        _session_connections.discard(writer)
+        print(f"[SESSION] disconnected: {session_id[:8]}... (remaining: {len(_session_connections)})", file=sys.stderr, flush=True)
+
+        if not _session_connections:
+            print(f"[SESSION] no sessions left, scheduling auto-shutdown in 5s", file=sys.stderr, flush=True)
+            _auto_shutdown_task = asyncio.create_task(_auto_shutdown())
+
+
+async def _auto_shutdown():
+    """Auto-shutdown after grace period when all sessions disconnect."""
+    await asyncio.sleep(5)
+    if not _session_connections:
+        print(f"[SESSION] auto-shutting down (no sessions for 5s)", file=sys.stderr, flush=True)
+        await wlk_manager.stop()
+        state.set(SESSION="stopped")
+        event_logger.close()
+        os._exit(0)
+
+
+# ── Client handler ────────────────────────────────────────────────────────────
+
+
+async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    """Handle a single client connection. Reads one JSON-line, dispatches, responds."""
+    try:
+        line = await asyncio.wait_for(reader.readline(), timeout=5.0)
+        if not line:
+            return
+
+        try:
+            msg = json.loads(line)
+        except json.JSONDecodeError:
+            writer.write(json.dumps({"ok": False, "error": "invalid JSON"}).encode() + b"\n")
+            await writer.drain()
+            return
+
+        cmd = msg.get("cmd", "")
+        params = {k: v for k, v in msg.items() if k != "cmd"}
+
+        # Session connect is special — persistent connection
+        if cmd == "session_connect":
+            await _handle_session_connect(reader, writer, params)
+            return
+
+        handler = COMMANDS.get(cmd)
+        if not handler:
+            writer.write(json.dumps({"ok": False, "error": f"unknown command: {cmd}"}).encode() + b"\n")
+            await writer.drain()
+            return
+
+        result = await handler(params)
+        writer.write(json.dumps(result).encode() + b"\n")
+        await writer.drain()
+
+    except asyncio.TimeoutError:
+        pass
+    except Exception as e:
+        try:
+            writer.write(json.dumps({"ok": False, "error": str(e)}).encode() + b"\n")
+            await writer.drain()
+        except Exception:
+            pass
+    finally:
+        try:
+            writer.close()
+            await writer.wait_closed()
+        except Exception:
+            pass
+
+
+# ============================================================================
+# Main
+# ============================================================================
+
+
+async def server_main():
+    """Async main: start WLK, queue processor, and Unix socket server."""
+    global message_queue, queue_processor_task
+
+    import socket as _socket
+
+    socket_path = Path.home() / ".claude-talk/audio-server.sock"
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    if socket_path.exists():
+        socket_path.unlink()
+
     message_queue = asyncio.Queue()
-
     state.set(SESSION="active", STATUS="idle", MUTED="false")
+
+    # Start WLK
     await wlk_manager.start()
-    # Wait for WLK to be ready
     for _ in range(30):
         try:
             reader, writer = await asyncio.wait_for(
@@ -1213,306 +1553,34 @@ async def lifespan(app: FastAPI):
     queue_processor_task = asyncio.create_task(process_message_queue())
     print("Message queue processor started")
 
-    yield
+    # Create Unix socket with restrictive permissions
+    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    sock.bind(str(socket_path))
+    socket_path.chmod(0o600)
+    sock.setblocking(False)
 
-    # Stop queue processor
-    if queue_processor_task:
-        await message_queue.put(None)  # Shutdown signal
-        try:
-            await asyncio.wait_for(queue_processor_task, timeout=5.0)
-        except asyncio.TimeoutError:
-            queue_processor_task.cancel()
+    server = await asyncio.start_unix_server(handle_client, sock=sock)
+    print(f"Audio server listening on {socket_path}")
 
-    await wlk_manager.stop()
-    state.set(SESSION="stopped")
-
-
-app = FastAPI(lifespan=lifespan)
-
-
-@app.get("/status")
-async def get_status() -> StatusResponse:
-    """Get current server state with device and interrupt info"""
-    import sounddevice as sd
-    input_dev = sd.query_devices(audio_engine.device_index)
-    default_out = sd.default.device[1]
-    output_dev = sd.query_devices(int(default_out)) if default_out is not None else {}
-
-    # Get current volume
-    volume_info = await get_volume()
-
-    return StatusResponse(
-        state=state.get("STATUS", "idle"),
-        muted=state.get("MUTED", "false") == "true",
-        input_device=input_dev.get("name", "unknown"),
-        input_device_index=audio_engine.device_index,
-        output_device=output_dev.get("name", "unknown"),
-        output_device_index=int(default_out) if default_out is not None else -1,
-        barge_in=audio_engine.barge_in_enabled,
-        blackhole_device=audio_engine.blackhole_device,
-        auto_device=audio_engine._auto_device,
-        voice=audio_engine.voice,
-        volume=volume_info["volume"],
-    )
-
-
-@app.get("/listen")
-async def listen() -> TextResponse:
-    """Block until user speaks, return transcription"""
-    event_logger.log_event("API_LISTEN_START")
-    text = await audio_engine.listen()
-    event_logger.log_event("API_LISTEN_END", {"text": text})
-
-    # Send transcription to Claude via tmux
     try:
-        print(f"[DEBUG] About to route: '{text}'", file=sys.stderr, flush=True)
-        send_transcription_to_claude(text)
-        print(f"[DEBUG] Routing complete", file=sys.stderr, flush=True)
-    except Exception as e:
-        print(f"[ERROR] Routing failed: {e}", file=sys.stderr, flush=True)
-        import traceback
-        traceback.print_exc()
-
-    return TextResponse(text=text)
-
-
-@app.post("/queue-listen")
-async def queue_listen() -> dict[str, str]:
-    """Start listening in background. Result buffered for next /speak."""
-    event_logger.log_event("API_QUEUE_LISTEN")
-    await audio_engine.queue_listen()
-    return {"status": "ok"}
-
-
-@app.post("/speak")
-async def speak(req: SpeakRequest) -> TextResponse:
-    """Speak text via TTS, then capture user's response (with interrupt if available).
-    BLOCKING: waits for user speech and returns transcription. Use /tts for async."""
-    event_logger.log_event("API_SPEAK_START", {"text": req.text})
-    text = await audio_engine.speak_and_listen(req.text)
-    event_logger.log_event("API_SPEAK_END", {"text": text})
-
-    # Send transcription to Claude via tmux
-    try:
-        send_transcription_to_claude(text)
-    except Exception as e:
-        print(f"[ERROR] Routing failed: {e}", file=sys.stderr, flush=True)
-
-    return TextResponse(text=text)
-
-
-@app.post("/tts")
-async def tts(req: SpeakRequest):
-    """Fire-and-forget TTS: speak text, then capture and route user response in background.
-    Returns immediately without waiting for user speech.
-    Optional voice field overrides the server's default voice for this utterance."""
-    original_voice = audio_engine.voice
-    if req.voice:
-        audio_engine.voice = req.voice
-
-    async def _speak_and_route(voice_to_restore: str):
-        try:
-            event_logger.log_event("TTS_START", {"text": req.text, "voice": audio_engine.voice})
-            text = await audio_engine.speak_and_listen(req.text)
-            event_logger.log_event("TTS_END", {"text": text})
-            send_transcription_to_claude(text)
-        except Exception as e:
-            print(f"[TTS] Error: {e}", file=sys.stderr, flush=True)
-        finally:
-            audio_engine.voice = voice_to_restore
-
-    asyncio.create_task(_speak_and_route(original_voice))
-    return {"status": "speaking"}
-
-
-@app.post("/queue-speak")
-async def queue_speak(req: QueueSpeakRequest) -> dict:
-    """Queue a TTS message with specific voice for sequential playback"""
-    print(f"[DEBUG] queue_speak called: text={req.text[:20]}, voice={req.voice}, session={req.session_id[:8]}", file=sys.stderr, flush=True)
-    try:
-        print(f"[DEBUG] message_queue is None: {message_queue is None}", file=sys.stderr, flush=True)
-        if message_queue is None:
-            raise HTTPException(status_code=503, detail="Message queue not initialized")
-
-        event_logger.log_event("API_QUEUE_SPEAK", {
-            "session_id": req.session_id,
-            "voice": req.voice,
-            "text": req.text[:50]
-        })
-        await message_queue.put({
-            "text": req.text,
-            "voice": req.voice,
-            "session_id": req.session_id
-        })
-        return {"status": "queued", "queue_size": message_queue.qsize()}
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"ERROR in queue_speak: {e}", file=sys.stderr, flush=True)
-        raise
-
-
-@app.get("/queue-response/{session_id}")
-async def get_queue_response(session_id: str) -> TextResponse:
-    """Get and clear the response for a session (blocks until available)"""
-    try:
-        # Poll for response with timeout
-        ready_key = f"READY_{session_id}"
-        response_key = f"RESPONSE_{session_id}"
-
-        for _ in range(3600):  # 1 hour timeout (1 second intervals)
-            # Check if response is ready (queue processor sets READY flag)
-            if state.get(ready_key) == "true":
-                response = state.get(response_key) or "(silence)"
-                # Clear both keys
-                state.set(**{ready_key: "", response_key: ""})
-                return TextResponse(text=response)
-            await asyncio.sleep(1)
-        return TextResponse(text="(timeout)")
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        print(f"ERROR in get_queue_response: {e}", file=sys.stderr, flush=True)
-        raise
-
-
-@app.get("/queue-status")
-async def get_queue_status() -> dict:
-    """Get current message queue status"""
-    return {
-        "queue_size": message_queue.qsize() if message_queue else 0,
-        "processor_running": queue_processor_task is not None and not queue_processor_task.done()
-    }
-
-
-@app.get("/devices")
-async def get_devices() -> dict:
-    """List audio devices with active input/output info"""
-    devices = sd.query_devices()
-    device_list = []
-    for i, dev in enumerate(devices):
-        device_list.append({
-            "index": i,
-            "name": dev["name"],
-            "input_channels": dev["max_input_channels"],
-            "output_channels": dev["max_output_channels"],
-        })
-    default_in, default_out = sd.default.device
-    return {
-        "devices": device_list,
-        "active_input": audio_engine.device_index,
-        "active_input_name": devices[audio_engine.device_index]["name"],
-        "default_input": int(default_in) if default_in is not None else None,
-        "default_output": int(default_out) if default_out is not None else None,
-    }
-
-
-@app.post("/mute")
-async def mute() -> dict[str, str]:
-    """Mute microphone"""
-    state.set(MUTED="true")
-    return {"status": "muted"}
-
-
-@app.post("/unmute")
-async def unmute() -> dict[str, str]:
-    """Unmute microphone"""
-    state.set(MUTED="false")
-    return {"status": "unmuted"}
-
-
-@app.post("/voice")
-async def set_voice(req: dict):
-    """Change TTS voice at runtime"""
-    voice = req.get("voice")
-    if not voice:
-        return {"error": "voice is required"}, 400
-    audio_engine.voice = voice
-    return {"voice": audio_engine.voice}
-
-
-@app.get("/volume")
-async def get_volume() -> dict[str, int]:
-    """Get current system output volume (0-100)"""
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "osascript", "-e", "output volume of (get volume settings)",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        stdout, _ = await proc.communicate()
-        volume = int(stdout.decode().strip())
-        return {"volume": volume}
-    except Exception:
-        return {"volume": 50}  # fallback
-
-
-@app.post("/volume/up")
-async def volume_up() -> dict[str, int]:
-    """Increase system volume by 10%"""
-    current = await get_volume()
-    new_volume = min(100, current["volume"] + 10)
-    try:
-        await asyncio.create_subprocess_exec(
-            "osascript", "-e", f"set volume output volume {new_volume}",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        return {"volume": new_volume}
-    except Exception:
-        return current
-
-
-@app.post("/volume/down")
-async def volume_down() -> dict[str, int]:
-    """Decrease system volume by 10%"""
-    current = await get_volume()
-    new_volume = max(0, current["volume"] - 10)
-    try:
-        await asyncio.create_subprocess_exec(
-            "osascript", "-e", f"set volume output volume {new_volume}",
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        return {"volume": new_volume}
-    except Exception:
-        return current
-
-
-@app.post("/stop")
-async def stop():
-    """Graceful shutdown"""
-    await wlk_manager.stop()
-    state.set(SESSION="stopped")
-    # Give time for response to be sent
-    asyncio.create_task(_delayed_exit())
-    return {"status": "shutting down"}
-
-
-async def _delayed_exit():
-    await asyncio.sleep(1)
-    os._exit(0)
-
-
-# ============================================================================
-# Main
-# ============================================================================
+        await server.serve_forever()
+    finally:
+        server.close()
+        if queue_processor_task:
+            await message_queue.put(None)
+            try:
+                await asyncio.wait_for(queue_processor_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                queue_processor_task.cancel()
+        await wlk_manager.stop()
+        state.set(SESSION="stopped")
+        event_logger.close()
+        if socket_path.exists():
+            socket_path.unlink()
 
 
 def main():
-    import socket as _socket
-    socket_path = Path.home() / ".claude-talk/audio-server.sock"
-    socket_path.parent.mkdir(parents=True, exist_ok=True)
-    if socket_path.exists():
-        socket_path.unlink()
-
-    # Create and bind socket ourselves so we can chmod before accepting connections
-    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
-    sock.bind(str(socket_path))
-    socket_path.chmod(0o600)  # Owner-only before any client can connect
-
-    print(f"Starting audio server on {socket_path}")
-    uvicorn.run(app, fd=sock.fileno(), log_level="warning")
+    asyncio.run(server_main())
 
 
 if __name__ == "__main__":

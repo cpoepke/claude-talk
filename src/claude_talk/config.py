@@ -7,12 +7,14 @@ from pathlib import Path
 class Config:
     """Loads config from defaults.env + ~/.claude-talk/config.env"""
 
-    def __init__(self, project_dir: Path | None = None):
+    def __init__(self, project_dir: Path | None = None, user_config_dir: Path | None = None):
         self.values: dict[str, str] = {}
         if project_dir is None:
             project_dir = Path(__file__).parent.parent.parent
         self._load_env_file(project_dir / "config/defaults.env")
-        user_config = Path.home() / ".claude-talk/config.env"
+        if user_config_dir is None:
+            user_config_dir = Path.home() / ".claude-talk"
+        user_config = user_config_dir / "config.env"
         if user_config.exists():
             self._load_env_file(user_config)
 
