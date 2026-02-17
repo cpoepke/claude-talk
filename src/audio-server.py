@@ -1001,7 +1001,7 @@ _auto_shutdown_task: asyncio.Task | None = None
 
 def send_transcription_to_claude(text: str) -> None:
     """Send transcription to Claude session(s) via tmux, using name-based routing."""
-    if not text or text == "(silence)":
+    if not text or text in ("(silence)", "(muted)", "(wlk_error)"):
         return
 
     from claude_talk.routing import parse_route, get_target_sessions
@@ -1025,32 +1025,33 @@ def send_transcription_to_claude(text: str) -> None:
             print(f"[TMUX] Failed to send to {tmux_target}", file=sys.stderr)
 
 
-async def _continuous_listen(last_tts_text: str = ""):
-    """Keep listening and routing until silence/error."""
-    try:
-        while True:
-            audio_engine.state.set(STATUS="listening")
-            text = await audio_engine._capture_utterance()
+async def _global_listener():
+    """Single global capture loop. Acquires lock per-capture, yields to speak_and_listen."""
+    while True:
+        try:
+            async with audio_engine.lock:
+                audio_engine.state.set(STATUS="listening")
+                text = await audio_engine._capture_utterance()
             if not text or text in ("(silence)", "(muted)", "(wlk_error)"):
+                if text == "(wlk_error)":
+                    await asyncio.sleep(2)
                 continue
-            cleaned = text.strip()
-            if len(cleaned) < 3:
+            if len(text.strip()) < 3:
                 continue
-            # Echo filter: check live engine state on every capture
+            # Echo filter: TTS bleed may reach global listener after speak_and_listen releases lock
             echo_text = audio_engine._last_tts_text
             if echo_text and audio_engine._tts_finished_at > 0:
                 since_tts = time.monotonic() - audio_engine._tts_finished_at
                 if since_tts < 15.0:
                     filtered = AudioEngine._strip_tts_echo(text, echo_text)
-                    print(f"[ECHO-FILTER] continuous: since_tts={since_tts:.1f}s input='{text[:50]}' output='{filtered[:50]}'", file=sys.stderr, flush=True)
+                    print(f"[ECHO-FILTER] since_tts={since_tts:.1f}s input='{text[:50]}' output='{filtered[:50]}'", file=sys.stderr, flush=True)
                     if not filtered or filtered == "(silence)":
                         continue
                     text = filtered
             send_transcription_to_claude(text)
-    except Exception as e:
-        print(f"[LISTEN] Error: {e}", file=sys.stderr, flush=True)
-    finally:
-        audio_engine.state.set(STATUS="idle")
+        except Exception as e:
+            print(f"[LISTENER] Error (retrying): {e}", file=sys.stderr, flush=True)
+            await asyncio.sleep(2)
 
 
 # ── Volume helpers ────────────────────────────────────────────────────────────
@@ -1108,7 +1109,7 @@ async def handle_status(params: dict) -> dict:
 
 
 async def handle_speak(params: dict) -> dict:
-    """Fire-and-forget TTS: speaks text, captures response, routes via tmux, then continuous listen."""
+    """Fire-and-forget TTS: speaks text, captures response, routes via tmux."""
     text = params.get("text", "")
     if not text:
         return {"ok": False, "error": "text is required"}
@@ -1127,7 +1128,6 @@ async def handle_speak(params: dict) -> dict:
             print(f"[TTS] Error: {e}", file=sys.stderr, flush=True)
         finally:
             audio_engine.voice = voice_to_restore
-            asyncio.create_task(_continuous_listen(last_tts_text=text))
 
     asyncio.create_task(_speak_and_route(original_voice))
     return {"ok": True, "status": "speaking"}
@@ -1358,9 +1358,14 @@ async def server_main():
     server = await asyncio.start_unix_server(handle_client, sock=sock)
     print(f"Audio server listening on {socket_path}")
 
+    # Start global listener — always-on mic capture, yields to speak via lock
+    listener_task = asyncio.create_task(_global_listener())
+    print("Global listener started")
+
     try:
         await server.serve_forever()
     finally:
+        listener_task.cancel()
         server.close()
         await wlk_manager.stop()
         state.set(SESSION="stopped")
