@@ -413,37 +413,10 @@ class AudioEngine:
             print(f"TTS failed: {e}", file=sys.stderr)
             return None
 
-    async def speak_and_listen(self, text: str) -> str:
-        """Speak text, then capture utterance (with interrupt if enabled)."""
-        async with self.lock:
-            if self._is_muted():
-                # Still speak, but don't capture
-                pid = await self.speak(text)
-                if pid:
-                    # Wait for TTS to finish
-                    while True:
-                        try:
-                            os.kill(pid, 0)
-                            await asyncio.sleep(0.1)
-                        except ProcessLookupError:
-                            break
-                return "(muted)"
-
-            # Start TTS
-            tts_pid = await self.speak(text)
-            if not tts_pid:
-                return "(silence)"
-
-            # Capture with interrupt
-            self.state.set(STATUS="speaking+listening")
-            try:
-                return await self._capture_utterance(tts_pid=tts_pid, tts_text=text)
-            finally:
-                self.state.set(STATUS="idle")
-
-    async def _capture_utterance(self, tts_pid: int = 0, tts_text: str = "") -> str:
+    async def _capture_utterance(self, tts_pid: int = 0, tts_text: str = "", tts_only: bool = False) -> str:
         """
         Core capture logic: streams mic to WLK, handles interrupt, returns text.
+        If tts_only=True: exits with "(silence)" when TTS finishes naturally (no barge-in).
         """
         # Health check: wait for WLK to be ready before connecting
         wlk_port = self.config.get_int("WLK_PORT", 8090)
@@ -559,6 +532,9 @@ class AudioEngine:
                     self.logger.log_event("TTS_STOPPED_NATURAL", {"pid": tts_pid})
                     self._tts_finished_at = time.monotonic()
                     tts_done_event.set()
+                    if tts_only and not barge_in_triggered:
+                        # TTS finished naturally, no barge-in — exit immediately
+                        done_event.set()
                     return
                 await asyncio.sleep(0.05)
 
@@ -1026,7 +1002,7 @@ def send_transcription_to_claude(text: str) -> None:
 
 
 async def _global_listener():
-    """Single global capture loop. Acquires lock per-capture, yields to speak_and_listen."""
+    """Single global capture loop. Acquires lock per-capture, yields to TTS."""
     while True:
         try:
             async with audio_engine.lock:
@@ -1038,7 +1014,7 @@ async def _global_listener():
                 continue
             if len(text.strip()) < 3:
                 continue
-            # Echo filter: TTS bleed may reach global listener after speak_and_listen releases lock
+            # Echo filter: TTS bleed may reach global listener after TTS releases lock
             echo_text = audio_engine._last_tts_text
             if echo_text and audio_engine._tts_finished_at > 0:
                 since_tts = time.monotonic() - audio_engine._tts_finished_at
@@ -1109,7 +1085,9 @@ async def handle_status(params: dict) -> dict:
 
 
 async def handle_speak(params: dict) -> dict:
-    """Fire-and-forget TTS: speaks text, captures response, routes via tmux."""
+    """Fire-and-forget TTS with barge-in support. Holds lock during TTS, releases when done.
+    If user interrupts (barge-in): captures interrupted speech and routes it.
+    If TTS finishes naturally: releases lock immediately, global listener captures user response."""
     text = params.get("text", "")
     if not text:
         return {"ok": False, "error": "text is required"}
@@ -1118,18 +1096,40 @@ async def handle_speak(params: dict) -> dict:
     if voice:
         audio_engine.voice = voice
 
-    async def _speak_and_route(voice_to_restore: str):
+    async def _do_tts(voice_to_restore: str):
         try:
-            event_logger.log_event("TTS_START", {"text": text, "voice": audio_engine.voice})
-            result = await audio_engine.speak_and_listen(text)
-            event_logger.log_event("TTS_END", {"text": result})
-            send_transcription_to_claude(result)
+            async with audio_engine.lock:
+                if audio_engine._is_muted():
+                    pid = await audio_engine.speak(text)
+                    if pid:
+                        while True:
+                            try:
+                                os.kill(pid, 0)
+                                await asyncio.sleep(0.1)
+                            except ProcessLookupError:
+                                break
+                    return
+
+                tts_pid = await audio_engine.speak(text)
+                if not tts_pid:
+                    return
+
+                audio_engine.state.set(STATUS="speaking+listening")
+                try:
+                    result = await audio_engine._capture_utterance(
+                        tts_pid=tts_pid, tts_text=text, tts_only=True
+                    )
+                    if result and result not in ("(silence)", "(muted)", "(wlk_error)"):
+                        # Barge-in happened — route the interrupted speech
+                        send_transcription_to_claude(result)
+                finally:
+                    audio_engine.state.set(STATUS="idle")
         except Exception as e:
             print(f"[TTS] Error: {e}", file=sys.stderr, flush=True)
         finally:
             audio_engine.voice = voice_to_restore
 
-    asyncio.create_task(_speak_and_route(original_voice))
+    asyncio.create_task(_do_tts(original_voice))
     return {"ok": True, "status": "speaking"}
 
 
