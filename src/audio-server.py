@@ -1155,7 +1155,7 @@ async def process_message_queue():
             message_queue.task_done()
 
 
-async def _continuous_listen():
+async def _continuous_listen(last_tts_text: str = ""):
     """Keep listening and routing until silence/error."""
     try:
         while True:
@@ -1166,6 +1166,12 @@ async def _continuous_listen():
             cleaned = text.strip()
             if len(cleaned) < 3:
                 continue
+            # Echo filter: strip TTS bleed from first capture after TTS
+            if last_tts_text:
+                text = AudioEngine._strip_tts_echo(text, last_tts_text)
+                last_tts_text = ""  # Only filter once
+                if not text or text == "(silence)":
+                    continue
             send_transcription_to_claude(text)
     except Exception as e:
         print(f"[LISTEN] Error: {e}", file=sys.stderr, flush=True)
@@ -1280,7 +1286,7 @@ async def handle_tts(params: dict) -> dict:
             print(f"[TTS] Error: {e}", file=sys.stderr, flush=True)
         finally:
             audio_engine.voice = voice_to_restore
-            asyncio.create_task(_continuous_listen())
+            asyncio.create_task(_continuous_listen(last_tts_text=text))
 
     asyncio.create_task(_speak_and_route(original_voice))
     return {"ok": True, "status": "speaking"}

@@ -213,13 +213,21 @@ def speak(text):
     voice = None
     tmux_pane = os.environ.get("TMUX_PANE", "").strip()
     if tmux_pane:
+        store = SessionStore(DB())
+        # Try pane file first
         pane_file = Path.home() / ".claude-talk/sessions" / tmux_pane.replace("%", "pane-")
         if pane_file.exists():
             session_id = pane_file.read_text().strip()
             if session_id:
-                info = SessionStore(DB()).get_personality(session_id)
+                info = store.get_personality(session_id)
                 if info:
                     voice = info.get("voice")
+        # Fallback: look up by tmux_target in DB
+        if not voice:
+            for s in store.list_sessions():
+                if s["status"] == "active" and s.get("tmux_target") == tmux_pane:
+                    voice = s.get("voice")
+                    break
     try:
         kwargs: dict = {"text": text}
         if voice:
