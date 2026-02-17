@@ -33,47 +33,17 @@ Launch a real-time voice conversation. You will hear Claude speak and can respon
 
 Keep the full personality.md content in your context for the duration of this voice chat session.
 
-### 2. Start Audio Server
+### 2. Start Audio Server and Register Session
 
-Start the audio server and wait for readiness (use Bash):
-```bash
-source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server start
-```
-
-If it fails, tell the user and abort.
-
-### 3. Register Session for Tmux Routing
-
-Get current tmux info and register this session (use Bash):
+Run both setup steps (use Bash):
 ```bash
 source ~/.claude-talk/venvs/wlk/bin/activate
-
-# Get tmux pane ID (keep the % prefix - tmux needs it)
-TMUX_TARGET=$(tmux display-message -p '#{pane_id}')
-
-# Get session ID (this conversation's ID)
-SESSION_ID=$(claude-talk session active 2>/dev/null || echo "")
-
-if [ -z "$SESSION_ID" ]; then
-  echo "Error: No active session found"
-  exit 1
-fi
-
-# Get personality name from active-personality file
-PERSONALITY=$(cat ~/.claude-talk/active-personality 2>/dev/null || echo "claude")
-
-# Get voice from personality.md
-VOICE=$(grep -A 1 "## Voice" ~/.claude-talk/personality.md | grep "Voice:" | sed 's/.*Voice: //')
-
-# Register this session for tmux routing
-claude-talk session set-tmux-target "$SESSION_ID" "$TMUX_TARGET"
-claude-talk session update-personality "$SESSION_ID" "$PERSONALITY" --voice "$VOICE"
-claude-talk state set SESSION active
-
-echo "Registered: $SESSION_ID -> $TMUX_TARGET (personality: $PERSONALITY)"
+claude-talk server start && claude-talk session register
 ```
 
-### 4. Greet the User
+If either command fails, tell the user and abort.
+
+### 3. Greet the User
 
 Craft a personalized greeting that:
 - Uses your personality name and conversational style from personality.md
@@ -93,7 +63,7 @@ claude-talk server speak "Your greeting text here"
 
 After speaking, tell the user: "Voice chat active. Speak into your mic — the audio server will route your speech back here."
 
-### 5. Conversational Mode
+### 4. Conversational Mode
 
 While voice chat is active, the audio server captures speech and routes transcriptions back to this tmux session via `tmux send-keys`.
 

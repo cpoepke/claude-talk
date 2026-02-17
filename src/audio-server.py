@@ -902,9 +902,11 @@ class AudioEngine:
                     idle_since = time.monotonic()
                     msg_count += 1
                 except asyncio.TimeoutError:
-                    # Resilience: 3s timeout for failure detection (only active after TTS done)
-                    if time.monotonic() - idle_since > 3.0:
-                        print("[WLK] unresponsive for 3s, ending capture", file=sys.stderr, flush=True)
+                    # Resilience: 3s timeout for WLK failure detection,
+                    # but only AFTER first speech has been received.
+                    # Before speech: wait up to max_duration for user to start speaking.
+                    if got_text and time.monotonic() - idle_since > 3.0:
+                        print("[WLK] unresponsive for 3s after speech, ending capture", file=sys.stderr, flush=True)
                         done_event.set()
                         return
                     continue
@@ -1268,7 +1270,14 @@ async def listen() -> TextResponse:
     event_logger.log_event("API_LISTEN_END", {"text": text})
 
     # Send transcription to Claude via tmux
-    send_transcription_to_claude(text)
+    try:
+        print(f"[DEBUG] About to route: '{text}'", file=sys.stderr, flush=True)
+        send_transcription_to_claude(text)
+        print(f"[DEBUG] Routing complete", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[ERROR] Routing failed: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc()
 
     return TextResponse(text=text)
 
@@ -1283,15 +1292,36 @@ async def queue_listen() -> dict[str, str]:
 
 @app.post("/speak")
 async def speak(req: SpeakRequest) -> TextResponse:
-    """Speak text via TTS, then capture user's response (with barge-in if available)"""
+    """Speak text via TTS, then capture user's response (with barge-in if available).
+    BLOCKING: waits for user speech and returns transcription. Use /tts for async."""
     event_logger.log_event("API_SPEAK_START", {"text": req.text})
     text = await audio_engine.speak_and_listen(req.text)
     event_logger.log_event("API_SPEAK_END", {"text": text})
 
     # Send transcription to Claude via tmux
-    send_transcription_to_claude(text)
+    try:
+        send_transcription_to_claude(text)
+    except Exception as e:
+        print(f"[ERROR] Routing failed: {e}", file=sys.stderr, flush=True)
 
     return TextResponse(text=text)
+
+
+@app.post("/tts")
+async def tts(req: SpeakRequest):
+    """Fire-and-forget TTS: speak text, then capture and route user response in background.
+    Returns immediately without waiting for user speech."""
+    async def _speak_and_route():
+        try:
+            event_logger.log_event("TTS_START", {"text": req.text})
+            text = await audio_engine.speak_and_listen(req.text)
+            event_logger.log_event("TTS_END", {"text": text})
+            send_transcription_to_claude(text)
+        except Exception as e:
+            print(f"[TTS] Error: {e}", file=sys.stderr, flush=True)
+
+    asyncio.create_task(_speak_and_route())
+    return {"status": "speaking"}
 
 
 @app.post("/queue-speak")
@@ -1469,9 +1499,19 @@ async def _delayed_exit():
 
 
 def main():
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
-    print(f"Starting audio server on port {port}")
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+    import socket as _socket
+    socket_path = Path.home() / ".claude-talk/audio-server.sock"
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    if socket_path.exists():
+        socket_path.unlink()
+
+    # Create and bind socket ourselves so we can chmod before accepting connections
+    sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+    sock.bind(str(socket_path))
+    socket_path.chmod(0o600)  # Owner-only before any client can connect
+
+    print(f"Starting audio server on {socket_path}")
+    uvicorn.run(app, fd=sock.fileno(), log_level="warning")
 
 
 if __name__ == "__main__":

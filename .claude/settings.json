@@ -1,1 +1,14 @@
-{}
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"/Users/cpoepke/Projects/Current/claude-talk/.claude/hooks/session-track.sh\""
+          }
+        ]
+      }
+    ]
+  }
+}

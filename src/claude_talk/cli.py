@@ -21,6 +21,27 @@ def cli():
     """Claude Talk — voice conversation plugin for Claude Code."""
 
 
+# ── Server IPC (Unix socket) ──────────────────────────────────────────────────
+
+_SOCKET_PATH = Path.home() / ".claude-talk/audio-server.sock"
+
+
+def _server_get(path: str, timeout: float = 5.0):
+    """GET request to audio server via Unix socket."""
+    import httpx
+    transport = httpx.HTTPTransport(uds=str(_SOCKET_PATH))
+    with httpx.Client(transport=transport, timeout=timeout) as client:
+        return client.get(f"http://localhost{path}")
+
+
+def _server_post(path: str, data: dict | None = None, timeout: float = 5.0):
+    """POST request to audio server via Unix socket."""
+    import httpx
+    transport = httpx.HTTPTransport(uds=str(_SOCKET_PATH))
+    with httpx.Client(transport=transport, timeout=timeout) as client:
+        return client.post(f"http://localhost{path}", json=data or {})
+
+
 # ── Server commands ──────────────────────────────────────────────────────────
 
 
@@ -37,7 +58,6 @@ def start(spawn_teammates, personalities):
     config = Config()
     wlk_venv = config.get("WLK_VENV")
     wlk_venv = os.path.expanduser(wlk_venv)
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
 
     project_dir = Path(__file__).parent.parent.parent
     server_script = project_dir / "src/audio-server.py"
@@ -66,18 +86,20 @@ def start(spawn_teammates, personalities):
 
     # Start in background using the venv's python
     python = Path(wlk_venv) / "bin/python3"
+    log_path = Path.home() / ".claude-talk/audio-server-stderr.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    stderr_log = open(log_path, "a")
     subprocess.Popen(
         [str(python), str(server_script)],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=stderr_log,
         start_new_session=True,
     )
 
-    # Wait for readiness
-    import urllib.request
+    # Wait for readiness (poll Unix socket)
     for _ in range(15):
         try:
-            urllib.request.urlopen(f"http://localhost:{port}/status", timeout=1)
+            _server_get("/status", timeout=1)
             click.echo("Audio server ready")
             return
         except Exception:
@@ -90,12 +112,8 @@ def start(spawn_teammates, personalities):
 @server.command()
 def stop():
     """Stop the audio server."""
-    config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
     try:
-        import urllib.request
-        req = urllib.request.Request(f"http://localhost:{port}/stop", method="POST")
-        urllib.request.urlopen(req, timeout=5)
+        _server_post("/stop")
     except Exception:
         pass
 
@@ -104,15 +122,12 @@ def stop():
 @click.option("--json", "output_json", is_flag=True, help="Output full status as JSON")
 def status(output_json):
     """Check if the audio server is running. With --json, output full status."""
-    config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
     try:
-        import urllib.request
-        with urllib.request.urlopen(f"http://localhost:{port}/status", timeout=2) as response:
-            if output_json:
-                click.echo(response.read().decode())
-            else:
-                click.echo("running")
+        r = _server_get("/status", timeout=2)
+        if output_json:
+            click.echo(r.text)
+        else:
+            click.echo("running")
     except Exception:
         if output_json:
             click.echo("{}", err=True)
@@ -123,19 +138,9 @@ def status(output_json):
 @click.argument("voice")
 def set_voice(voice):
     """Set the TTS voice on the audio server."""
-    config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            f"http://localhost:{port}/voice",
-            data=json.dumps({"voice": voice}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        response = urllib.request.urlopen(req, timeout=2)
-        result = json.loads(response.read())
-        click.echo(json.dumps(result))
+        r = _server_post("/voice", {"voice": voice}, timeout=2)
+        click.echo(r.text)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -143,22 +148,10 @@ def set_voice(voice):
 
 @server.command("speak")
 @click.argument("text")
-@click.option("--timeout", default=3600, help="Request timeout in seconds")
-def speak(text, timeout):
-    """Speak text via TTS and capture user response."""
-    config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
+def speak(text):
+    """Speak text via TTS (fire-and-forget). Audio server captures user response and routes via tmux."""
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            f"http://localhost:{port}/speak",
-            data=json.dumps({"text": text}).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        response = urllib.request.urlopen(req, timeout=timeout)
-        result = json.loads(response.read())
-        click.echo(json.dumps(result))
+        _server_post("/tts", {"text": text})
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -174,7 +167,6 @@ def queue_speak(text, session_id, timeout):
     from .session import SessionStore
 
     config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
 
     # Get session's voice from database
     store = SessionStore(DB())
@@ -186,31 +178,12 @@ def queue_speak(text, session_id, timeout):
     voice = session_info.get("voice") or config.get("VOICE", "Daniel")
 
     try:
-        import urllib.request
-
-        # Queue the message
-        req = urllib.request.Request(
-            f"http://localhost:{port}/queue-speak",
-            data=json.dumps({
-                "text": text,
-                "voice": voice,
-                "session_id": session_id
-            }).encode(),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        response = urllib.request.urlopen(req, timeout=5)
-        queue_result = json.loads(response.read())
+        r = _server_post("/queue-speak", {"text": text, "voice": voice, "session_id": session_id})
+        queue_result = r.json()
         click.echo(f"Queued (position: {queue_result.get('queue_size', '?')})", err=True)
 
-        # Wait for response
-        response = urllib.request.urlopen(
-            f"http://localhost:{port}/queue-response/{session_id}",
-            timeout=timeout
-        )
-        result = json.loads(response.read())
-        click.echo(json.dumps(result))
-
+        r = _server_get(f"/queue-response/{session_id}", timeout=timeout)
+        click.echo(r.text)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -220,13 +193,9 @@ def queue_speak(text, session_id, timeout):
 @click.option("--timeout", default=3600, help="Request timeout in seconds")
 def listen(timeout):
     """Listen for user speech (blocking)."""
-    config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
     try:
-        import urllib.request
-        response = urllib.request.urlopen(f"http://localhost:{port}/listen", timeout=timeout)
-        result = json.loads(response.read())
-        click.echo(json.dumps(result))
+        r = _server_get("/listen", timeout=timeout)
+        click.echo(r.text)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -235,16 +204,8 @@ def listen(timeout):
 @server.command("queue-listen")
 def queue_listen():
     """Queue a background listen operation."""
-    config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            f"http://localhost:{port}/queue-listen",
-            data=b"",
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=2)
+        _server_post("/queue-listen")
         click.echo("Queued")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -254,14 +215,9 @@ def queue_listen():
 @server.command("volume")
 def get_volume():
     """Get current system volume (0-100)."""
-    config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
     try:
-        import urllib.request
-        req = urllib.request.Request(f"http://localhost:{port}/volume")
-        with urllib.request.urlopen(req, timeout=2) as response:
-            data = json.loads(response.read().decode())
-            click.echo(data.get("volume", 50))
+        r = _server_get("/volume", timeout=2)
+        click.echo(r.json().get("volume", 50))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -270,18 +226,9 @@ def get_volume():
 @server.command("volume-up")
 def volume_up():
     """Increase system volume by 10%."""
-    config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            f"http://localhost:{port}/volume/up",
-            data=b"",
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=2) as response:
-            data = json.loads(response.read().decode())
-            click.echo(data.get("volume", 50))
+        r = _server_post("/volume/up", timeout=2)
+        click.echo(r.json().get("volume", 50))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -290,18 +237,9 @@ def volume_up():
 @server.command("volume-down")
 def volume_down():
     """Decrease system volume by 10%."""
-    config = Config()
-    port = config.get_int("AUDIO_SERVER_PORT", 8150)
     try:
-        import urllib.request
-        req = urllib.request.Request(
-            f"http://localhost:{port}/volume/down",
-            data=b"",
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=2) as response:
-            data = json.loads(response.read().decode())
-            click.echo(data.get("volume", 50))
+        r = _server_post("/volume/down", timeout=2)
+        click.echo(r.json().get("volume", 50))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -384,6 +322,70 @@ def release(session_id):
     store = _get_store()
     store.release(session_id)
     click.echo(f"Session {session_id} released", err=True)
+
+
+@session.command("activate")
+@click.argument("session_id")
+def activate(session_id):
+    """Set a session status to active in the DB."""
+    store = _get_store()
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    store.db.execute(
+        "UPDATE sessions SET status='active', updated_at=? WHERE session_id=?",
+        (now, session_id),
+    )
+    store.db.commit()
+    click.echo(f"Session {session_id[:8]}... activated", err=True)
+
+
+@session.command("register")
+def register():
+    """Register the current session for tmux routing (reads env/files, no args needed).
+
+    Reads session ID from ~/.claude-talk/current-session (written by UserPromptSubmit hook),
+    tmux pane from $TMUX_PANE, personality from ~/.claude-talk/active-personality.
+    Claims/activates the session and sets tmux target + personality.
+    """
+    # Get session ID
+    current_session_file = Path.home() / ".claude-talk/current-session"
+    session_id = None
+    if current_session_file.exists():
+        session_id = current_session_file.read_text().strip()
+    if not session_id:
+        click.echo("Error: No current session ID found. Ensure UserPromptSubmit hook is configured.", err=True)
+        sys.exit(1)
+
+    # Get tmux pane (already in %N format from tmux env)
+    tmux_target = os.environ.get("TMUX_PANE", "").strip()
+    if not tmux_target:
+        click.echo("Error: Not running in tmux ($TMUX_PANE not set).", err=True)
+        sys.exit(1)
+
+    # Get personality
+    active_personality_file = Path.home() / ".claude-talk/active-personality"
+    personality = "claude"
+    if active_personality_file.exists():
+        personality = active_personality_file.read_text().strip() or "claude"
+
+    # Get voice from personality template
+    voice = None
+    if personality != "unknown":
+        try:
+            from .personality import load_personality
+            info = load_personality(personality)
+            voice = info.get("voice")
+        except Exception:
+            pass
+    if not voice:
+        config = Config()
+        voice = config.get("VOICE")
+
+    # Claim/activate session with personality and voice, then set tmux target
+    store = _get_store()
+    store.claim(session_id, personality, voice)
+    store.set_tmux_target(session_id, tmux_target)
+    click.echo(f"Registered: {session_id[:8]}... -> {tmux_target} (personality: {personality})")
 
 
 @session.command("is-active")
