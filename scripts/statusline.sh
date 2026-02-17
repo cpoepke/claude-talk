@@ -36,6 +36,13 @@ if [[ -f "$STATE_FILE" ]]; then
         STATUS=$(grep "^STATUS=" "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo "")
         MUTED=$(grep "^MUTED=" "$STATE_FILE" 2>/dev/null | head -1 | cut -d= -f2- || echo "")
 
+        # Session ID (short hash) from pane file
+        SESSION_SHORT=""
+        if [[ -n "$TMUX_PANE" ]]; then
+            PANE_FILE="$HOME/.claude-talk/sessions/${TMUX_PANE//%/pane-}"
+            [[ -f "$PANE_FILE" ]] && SESSION_SHORT=$(cut -c1-8 "$PANE_FILE")
+        fi
+
         # Personality (with color) — default "--"
         PERSONALITY_DISPLAY="--"
         PERSONALITY_COLOR="90"
@@ -77,7 +84,9 @@ if [[ -f "$STATE_FILE" ]]; then
         fi
 
         SEP="\033[2m|\033[0m"
-        VOICE_BLOCK="\033[${PERSONALITY_COLOR}m${PERSONALITY_DISPLAY}\033[0m ${SEP} ${MIC_STATUS} ${SEP} ${BARGE_DISPLAY} ${SEP} ${VOL_DISPLAY}"
+        SESSION_PART=""
+        [[ -n "$SESSION_SHORT" ]] && SESSION_PART="\033[90m${SESSION_SHORT}\033[0m ${SEP} "
+        VOICE_BLOCK="${SESSION_PART}\033[${PERSONALITY_COLOR}m${PERSONALITY_DISPLAY}\033[0m ${SEP} ${MIC_STATUS} ${SEP} ${BARGE_DISPLAY} ${SEP} ${VOL_DISPLAY}"
     fi
 fi
 
