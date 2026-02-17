@@ -1045,19 +1045,21 @@ class AudioEngine:
             # Strip matched echo words, keep the rest
             remaining_words = transcription.split()[best_match_len:]
             remaining = " ".join(remaining_words).strip(" .,!?-—")
-            if remaining:
-                print(f"[ECHO-FILTER] stripped {best_match_len} TTS echo words, kept: '{remaining}'", file=sys.stderr, flush=True)
-                return remaining
-            else:
+            if not remaining:
                 print(f"[ECHO-FILTER] entire transcription was TTS echo", file=sys.stderr, flush=True)
                 return "(silence)"
+            # Continue to fuzzy check on remaining text (echo may extend beyond exact match)
+            print(f"[ECHO-FILTER] stripped {best_match_len} TTS echo words, checking remainder: '{remaining[:60]}'", file=sys.stderr, flush=True)
+            transcription = remaining
+            trans_words = transcription.lower().split()
 
-        # Fuzzy check: if >50% of transcription words appear in TTS text, likely echo
+        # Fuzzy check: if >30% of transcription words appear in TTS text, likely echo
+        # (lowered from 50% because Whisper garbles echo significantly)
         if len(trans_words) >= 4:
             tts_word_set = set(w.rstrip(".,!?;:-—'\"") for w in tts_words)
             match_count = sum(1 for w in trans_words if w.rstrip(".,!?;:-—'\"") in tts_word_set)
             match_ratio = match_count / len(trans_words)
-            if match_ratio > 0.5:
+            if match_ratio > 0.3:
                 print(f"[ECHO-FILTER] fuzzy match {match_ratio:.0%} ({match_count}/{len(trans_words)} words), treating as echo", file=sys.stderr, flush=True)
                 return "(silence)"
 
@@ -1165,11 +1167,6 @@ async def process_message_queue():
 async def _continuous_listen(last_tts_text: str = ""):
     """Keep listening and routing until silence/error."""
     try:
-        # Echo filter: use engine's last TTS text for all captures
-        # within the post-TTS window (covers multiple capture cycles)
-        echo_text = last_tts_text or audio_engine._last_tts_text
-        echo_window_end = audio_engine._tts_finished_at + 10.0 if echo_text else 0
-
         while True:
             audio_engine.state.set(STATUS="listening")
             text = await audio_engine._capture_utterance()
@@ -1178,11 +1175,16 @@ async def _continuous_listen(last_tts_text: str = ""):
             cleaned = text.strip()
             if len(cleaned) < 3:
                 continue
-            # Echo filter: strip TTS bleed for captures within window
-            if echo_text and time.monotonic() < echo_window_end:
-                text = AudioEngine._strip_tts_echo(text, echo_text)
-                if not text or text == "(silence)":
-                    continue
+            # Echo filter: check live engine state on every capture
+            echo_text = audio_engine._last_tts_text
+            if echo_text and audio_engine._tts_finished_at > 0:
+                since_tts = time.monotonic() - audio_engine._tts_finished_at
+                if since_tts < 15.0:
+                    filtered = AudioEngine._strip_tts_echo(text, echo_text)
+                    print(f"[ECHO-FILTER] continuous: since_tts={since_tts:.1f}s input='{text[:50]}' output='{filtered[:50]}'", file=sys.stderr, flush=True)
+                    if not filtered or filtered == "(silence)":
+                        continue
+                    text = filtered
             send_transcription_to_claude(text)
     except Exception as e:
         print(f"[LISTEN] Error: {e}", file=sys.stderr, flush=True)
