@@ -130,9 +130,13 @@ class TeammateManager:
                 capture_output=True, text=True, check=True,
             )
 
-        # Apply auto-fit tiled layout
+        # Apply auto-fit tiled layout and ensure mouse mode is on
         subprocess.run(
             ["tmux", "select-layout", "-t", window_target, "tiled"],
+            capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["tmux", "set-option", "-t", window_target, "mouse", "on"],
             capture_output=True, text=True,
         )
 
@@ -208,9 +212,14 @@ class TeammateManager:
         return teammates
 
     def list_teammates(self) -> list[dict]:
-        """List all active teammates."""
+        """List all active non-primary teammates."""
         sessions = self.session_store.list_sessions()
-        return [s for s in sessions if s["status"] == "active" and s["personality"] != "unknown"]
+        return [
+            s for s in sessions
+            if s["status"] == "active"
+            and s["personality"] != "unknown"
+            and not s.get("is_primary")
+        ]
 
     def kill_teammate(self, session_id: str) -> None:
         """Stop a teammate and release its session."""

@@ -149,9 +149,21 @@ def set_voice(voice):
 @server.command("speak")
 @click.argument("text")
 def speak(text):
-    """Speak text via TTS (fire-and-forget). Audio server captures user response and routes via tmux."""
+    """Speak text via TTS using the current session's voice (fire-and-forget)."""
+    # Look up voice for the current session so each personality sounds like themselves
+    voice = None
+    current_session_file = Path.home() / ".claude-talk/current-session"
+    if current_session_file.exists():
+        session_id = current_session_file.read_text().strip()
+        if session_id:
+            info = SessionStore(DB()).get_personality(session_id)
+            if info:
+                voice = info.get("voice")
     try:
-        _server_post("/tts", {"text": text})
+        payload: dict = {"text": text}
+        if voice:
+            payload["voice"] = voice
+        _server_post("/tts", payload)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

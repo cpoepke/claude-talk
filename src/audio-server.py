@@ -1063,6 +1063,7 @@ class AudioEngine:
 
 class SpeakRequest(BaseModel):
     text: str
+    voice: str | None = None  # Optional: override server voice for this request
 
 
 class QueueSpeakRequest(BaseModel):
@@ -1103,36 +1104,29 @@ session_store = SessionStore(db)
 
 
 def send_transcription_to_claude(text: str) -> None:
-    """Send transcription to active Claude session via tmux."""
+    """Send transcription to Claude session(s) via tmux, using name-based routing."""
     if not text or text == "(silence)":
         return
 
-    # Get primary session, or fall back to any active session with tmux target
-    session_id = session_store.get_primary()
-    if not session_id:
-        # No primary - find any active session with a tmux target
-        sessions = session_store.list_sessions()
-        for s in sessions:
-            if s["status"] == "active" and s.get("tmux_target"):
-                session_id = s["session_id"]
-                print(f"[TMUX] No primary session, using active: {session_id[:8]}", file=sys.stderr)
-                break
+    from claude_talk.routing import parse_route, get_target_sessions
 
-    if not session_id:
-        print(f"[TMUX] No active session with tmux target found", file=sys.stderr)
+    route_type, target_session_id, cleaned_text = parse_route(text)
+    session_ids = get_target_sessions(route_type, target_session_id)
+
+    if not session_ids:
+        print(f"[TMUX] No target sessions found (route: {route_type})", file=sys.stderr)
         return
 
-    # Get tmux target
-    tmux_target = session_store.get_tmux_target(session_id)
-    if not tmux_target:
-        print(f"[TMUX] No tmux target for session {session_id}", file=sys.stderr)
-        return
-
-    # Send to Claude
-    if send_to_session(tmux_target, text):
-        print(f"[TMUX] Sent to {tmux_target}: {text}", file=sys.stderr)
-    else:
-        print(f"[TMUX] Failed to send to {tmux_target}", file=sys.stderr)
+    routed_text = f"The user said aloud: {cleaned_text}"
+    for sid in session_ids:
+        tmux_target = session_store.get_tmux_target(sid)
+        if not tmux_target:
+            print(f"[TMUX] No tmux target for session {sid[:8]}", file=sys.stderr)
+            continue
+        if send_to_session(tmux_target, routed_text):
+            print(f"[TMUX] {route_type} -> {tmux_target}: {cleaned_text}", file=sys.stderr)
+        else:
+            print(f"[TMUX] Failed to send to {tmux_target}", file=sys.stderr)
 
 # Message queue for multi-session voice handling (initialized in lifespan)
 message_queue = None
@@ -1310,17 +1304,24 @@ async def speak(req: SpeakRequest) -> TextResponse:
 @app.post("/tts")
 async def tts(req: SpeakRequest):
     """Fire-and-forget TTS: speak text, then capture and route user response in background.
-    Returns immediately without waiting for user speech."""
-    async def _speak_and_route():
+    Returns immediately without waiting for user speech.
+    Optional voice field overrides the server's default voice for this utterance."""
+    original_voice = audio_engine.voice
+    if req.voice:
+        audio_engine.voice = req.voice
+
+    async def _speak_and_route(voice_to_restore: str):
         try:
-            event_logger.log_event("TTS_START", {"text": req.text})
+            event_logger.log_event("TTS_START", {"text": req.text, "voice": audio_engine.voice})
             text = await audio_engine.speak_and_listen(req.text)
             event_logger.log_event("TTS_END", {"text": text})
             send_transcription_to_claude(text)
         except Exception as e:
             print(f"[TTS] Error: {e}", file=sys.stderr, flush=True)
+        finally:
+            audio_engine.voice = voice_to_restore
 
-    asyncio.create_task(_speak_and_route())
+    asyncio.create_task(_speak_and_route(original_voice))
     return {"status": "speaking"}
 
 
