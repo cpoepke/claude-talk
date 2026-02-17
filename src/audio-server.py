@@ -372,6 +372,8 @@ class AudioEngine:
         self._tts_pid: int | None = None
         # Track when TTS last finished for post-TTS protection in all capture paths
         self._tts_finished_at: float = 0.0
+        # Track last TTS text for echo filtering in continuous listen
+        self._last_tts_text: str = ""
 
         # Buffered listen: pre-captured text from /queue-listen
         self._buffered_text: str | None = None
@@ -404,6 +406,7 @@ class AudioEngine:
             self._tts_pid = None
 
         self.state.set(STATUS="speaking")
+        self._last_tts_text = text
         self.logger.log_event("TTS_START", {"text": text, "voice": self.voice})
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -903,11 +906,15 @@ class AudioEngine:
                     idle_since = time.monotonic()
                     msg_count += 1
                 except asyncio.TimeoutError:
-                    # Resilience: 3s timeout for WLK failure detection,
-                    # but only AFTER first speech has been received.
-                    # Before speech: wait up to max_duration for user to start speaking.
-                    if got_text and time.monotonic() - idle_since > 3.0:
+                    elapsed = time.monotonic() - idle_since
+                    if got_text and elapsed > 3.0:
+                        # After speech: 3s silence = done
                         print("[WLK] unresponsive for 3s after speech, ending capture", file=sys.stderr, flush=True)
+                        done_event.set()
+                        return
+                    if not got_text and msg_count == 0 and elapsed > 10.0:
+                        # No messages at all for 10s = WLK likely dead
+                        print("[WLK] no messages received for 10s, WLK may be down", file=sys.stderr, flush=True)
                         done_event.set()
                         return
                     continue
@@ -1158,6 +1165,11 @@ async def process_message_queue():
 async def _continuous_listen(last_tts_text: str = ""):
     """Keep listening and routing until silence/error."""
     try:
+        # Echo filter: use engine's last TTS text for all captures
+        # within the post-TTS window (covers multiple capture cycles)
+        echo_text = last_tts_text or audio_engine._last_tts_text
+        echo_window_end = audio_engine._tts_finished_at + 10.0 if echo_text else 0
+
         while True:
             audio_engine.state.set(STATUS="listening")
             text = await audio_engine._capture_utterance()
@@ -1166,10 +1178,9 @@ async def _continuous_listen(last_tts_text: str = ""):
             cleaned = text.strip()
             if len(cleaned) < 3:
                 continue
-            # Echo filter: strip TTS bleed from first capture after TTS
-            if last_tts_text:
-                text = AudioEngine._strip_tts_echo(text, last_tts_text)
-                last_tts_text = ""  # Only filter once
+            # Echo filter: strip TTS bleed for captures within window
+            if echo_text and time.monotonic() < echo_window_end:
+                text = AudioEngine._strip_tts_echo(text, echo_text)
                 if not text or text == "(silence)":
                     continue
             send_transcription_to_claude(text)
