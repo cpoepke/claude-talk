@@ -39,8 +39,8 @@ if [[ -f "$STATE_FILE" ]]; then
         # Personality (with color) — default "--"
         PERSONALITY_DISPLAY="--"
         PERSONALITY_COLOR="90"
-        if [[ -n "$SESSION_ID" ]]; then
-            PERSONALITY_JSON=$(source "$HOME/.claude-talk/venvs/wlk/bin/activate" && claude-talk personality display "$SESSION_ID" --json 2>/dev/null || echo "")
+        if [[ -n "$TMUX_PANE" ]]; then
+            PERSONALITY_JSON=$(source "$HOME/.claude-talk/venvs/wlk/bin/activate" && claude-talk personality display --pane "$TMUX_PANE" --json 2>/dev/null || echo "")
             if [[ -n "$PERSONALITY_JSON" ]]; then
                 PNAME=$(echo "$PERSONALITY_JSON" | jq -r '.display_name // empty' 2>/dev/null || echo "")
                 PCOLOR=$(echo "$PERSONALITY_JSON" | jq -r '.color // "95"' 2>/dev/null || echo "95")

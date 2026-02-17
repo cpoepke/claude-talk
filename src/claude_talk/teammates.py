@@ -4,7 +4,6 @@ import math
 import os
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 
 from .config import Config
@@ -35,28 +34,33 @@ def _auto_grid(n: int) -> tuple[int, int]:
 
 
 def _get_current_claude_flags() -> str:
-    """Extract flags from the current Claude Code session to inherit."""
+    """Extract flags from the parent Claude Code process to inherit."""
     try:
-        # Get current process command line
+        # Walk up process tree to find the claude process
         pid = os.getpid()
-        result = subprocess.run(
-            ["ps", "-p", str(pid), "-o", "command="],
-            capture_output=True, text=True, check=True,
-        )
-        cmd = result.stdout.strip()
-
-        # Extract common flags to inherit
-        flags = []
-        if "--dangerously-skip-permissions" in cmd:
-            flags.append("--dangerously-skip-permissions")
-        if "--model" in cmd:
-            # Extract model value
-            parts = cmd.split("--model")
-            if len(parts) > 1:
-                model_part = parts[1].strip().split()[0]
-                flags.append(f"--model {model_part}")
-
-        return " ".join(flags)
+        for _ in range(10):  # max 10 levels up
+            result = subprocess.run(
+                ["ps", "-p", str(pid), "-o", "ppid=,command="],
+                capture_output=True, text=True, check=True,
+            )
+            line = result.stdout.strip()
+            parts = line.split(None, 1)
+            if len(parts) < 2:
+                break
+            ppid, cmd = parts[0], parts[1]
+            if "/claude" in cmd and "claude-talk" not in cmd:
+                # Found the Claude Code process
+                flags = []
+                if "--dangerously-skip-permissions" in cmd:
+                    flags.append("--dangerously-skip-permissions")
+                if "--model" in cmd:
+                    model_parts = cmd.split("--model")
+                    if len(model_parts) > 1:
+                        model_val = model_parts[1].strip().split()[0]
+                        flags.append(f"--model {model_val}")
+                return " ".join(flags)
+            pid = int(ppid)
+        return ""
     except Exception:
         return ""
 
@@ -95,6 +99,22 @@ class TeammateManager:
             print("Error: Duplicate personalities not allowed", file=sys.stderr)
             sys.exit(1)
 
+        # Clean up stale sessions before checking availability
+        for s in self.session_store.list_sessions():
+            if s["status"] != "active":
+                continue
+            stale_target = s.get("tmux_target")
+            if not stale_target:
+                self.session_store.release(s["session_id"])
+                continue
+            result = subprocess.run(
+                ["tmux", "has-session", "-t", stale_target],
+                capture_output=True,
+            )
+            if result.returncode != 0:
+                self.session_store.release(s["session_id"])
+                print(f"Released stale session {s['session_id'][:8]}... (pane gone)", file=sys.stderr)
+
         # Validate all personalities exist and are available
         for name in personalities:
             try:
@@ -108,20 +128,29 @@ class TeammateManager:
 
         tmux_session = _get_current_tmux_session()
         if not tmux_session:
-            print("Error: Not running inside tmux", file=sys.stderr)
+            print("Error: Not running inside tmux.", file=sys.stderr)
+            print("Teammates require tmux. Start Claude Code inside a tmux session:", file=sys.stderr)
+            print("  tmux new-session && claude", file=sys.stderr)
             sys.exit(1)
 
         n = len(personalities)
         project_dir = Path(__file__).parent.parent.parent
         inherited_flags = _get_current_claude_flags()
 
-        # Get current window target
+        # Get current window and pane targets
         result = subprocess.run(
             ["tmux", "display-message", "-p", "#{window_index}"],
             capture_output=True, text=True, check=True,
         )
         window_idx = result.stdout.strip()
         window_target = f"{tmux_session}:{window_idx}"
+
+        # Remember original pane to select back after spawning
+        result = subprocess.run(
+            ["tmux", "display-message", "-p", "#{pane_id}"],
+            capture_output=True, text=True, check=True,
+        )
+        original_pane = result.stdout.strip()
 
         # Split current window into panes for each teammate
         for _ in range(n):
@@ -135,8 +164,9 @@ class TeammateManager:
             ["tmux", "select-layout", "-t", window_target, "tiled"],
             capture_output=True, text=True,
         )
+        # Enable mouse at session level so all panes are clickable
         subprocess.run(
-            ["tmux", "set-option", "-t", window_target, "mouse", "on"],
+            ["tmux", "set-option", "-t", tmux_session, "mouse", "on"],
             capture_output=True, text=True,
         )
 
@@ -155,13 +185,7 @@ class TeammateManager:
             tmux_target = f"{window_target}.{pane_idx}"
 
             personality_info = load_personality(name)
-            voice = personality_info.get("voice")
             display_name = personality_info.get("display_name", name)
-            personality_file = Path.home() / ".claude-talk" / "personalities" / f"{name}.md"
-
-            session_id = str(uuid.uuid4())
-            self.session_store.claim(session_id, name, voice, is_primary=False)
-            self.session_store.set_tmux_target(session_id, tmux_target)
 
             # Set pane title for easy identification
             subprocess.run(
@@ -169,8 +193,8 @@ class TeammateManager:
                 check=True,
             )
 
-            # Launch Claude with personality in this pane
-            claude_cmd = f"cd {project_dir} && claude {inherited_flags} --append-system-prompt \"$(cat {personality_file})\""
+            # Launch Claude in this pane (in the project dir so it picks up skills/hooks)
+            claude_cmd = f"cd {project_dir} && claude {inherited_flags}"
             subprocess.run(
                 ["tmux", "send-keys", "-t", tmux_target, claude_cmd],
                 check=True,
@@ -182,32 +206,31 @@ class TeammateManager:
 
             print(f"Spawned {name} -> {tmux_target}", file=sys.stderr)
             teammates.append({
-                "session_id": session_id,
                 "personality": name,
                 "display_name": display_name,
-                "voice": voice,
                 "tmux_target": tmux_target,
             })
 
-        # Wait for Claude instances to start, then send greeting
+        # Wait for Claude instances to start, then send /claude-talk:start <personality>
         import time
         wait_time = int(self.config.get("TEAMMATE_STARTUP_WAIT", 12))
         print(f"Waiting {wait_time}s for Claude instances to start...", file=sys.stderr)
         time.sleep(wait_time)
 
-        team_roster = ", ".join(t["display_name"] for t in teammates)
-        print(f"Sending greetings to {len(teammates)} teammates...", file=sys.stderr)
+        print(f"Starting voice for {len(teammates)} teammates...", file=sys.stderr)
+        from .tmux import send_to_session
         for t in teammates:
-            greeting = (
-                f"You are {t['display_name']} on a voice team with: {team_roster}. "
-                f"Introduce yourself in one sentence, in character."
-            )
-            from .tmux import send_to_session
-            success = send_to_session(t["tmux_target"], greeting)
+            success = send_to_session(t["tmux_target"], f"/claude-talk:start {t['personality']}")
             if success:
-                print(f"  ✓ Sent greeting to {t['personality']}", file=sys.stderr)
+                print(f"  ✓ Started {t['personality']}", file=sys.stderr)
             else:
-                print(f"  ✗ Failed to send greeting to {t['personality']}", file=sys.stderr)
+                print(f"  ✗ Failed to start {t['personality']}", file=sys.stderr)
+
+        # Select back to original pane so user has focus
+        subprocess.run(
+            ["tmux", "select-pane", "-t", original_pane],
+            capture_output=True, text=True,
+        )
 
         return teammates
 

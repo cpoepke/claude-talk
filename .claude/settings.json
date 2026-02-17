@@ -1,11 +1,11 @@
 {
   "hooks": {
-    "UserPromptSubmit": [
+    "SessionEnd": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"/Users/cpoepke/Projects/Current/claude-talk/.claude/hooks/session-track.sh\""
+            "command": "source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk session release-current 2>/dev/null || true"
           }
         ]
       }
