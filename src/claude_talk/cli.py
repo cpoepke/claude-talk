@@ -393,9 +393,25 @@ def register():
         config = Config()
         voice = config.get("VOICE")
 
-    # Claim/activate session with personality and voice, then set tmux target
+    # Clean up stale sessions: release any "active" sessions whose tmux pane no longer exists
     store = _get_store()
-    store.claim(session_id, personality, voice)
+    for s in store.list_sessions():
+        if s["status"] != "active" or s["session_id"] == session_id:
+            continue
+        stale_target = s.get("tmux_target")
+        if not stale_target:
+            store.release(s["session_id"])
+            continue
+        result = subprocess.run(
+            ["tmux", "has-session", "-t", stale_target],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            store.release(s["session_id"])
+            click.echo(f"Released stale session {s['session_id'][:8]}... (pane {stale_target} gone)", err=True)
+
+    # Claim/activate session as primary and set tmux target
+    store.claim(session_id, personality, voice, is_primary=True)
     store.set_tmux_target(session_id, tmux_target)
     click.echo(f"Registered: {session_id[:8]}... -> {tmux_target} (personality: {personality})")
 

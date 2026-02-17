@@ -48,12 +48,14 @@ if [[ -f "$STATE_FILE" ]]; then
             fi
         fi
 
-        # Mic status
+        # Mic status (handle compound states like "speaking+listening")
         if [[ "$MUTED" == "true" ]]; then
             MIC_STATUS="\033[31m🚫 muted\033[0m"
-        elif [[ "$STATUS" == "listening" ]]; then
+        elif [[ "$STATUS" == *"listening"* && "$STATUS" == *"speaking"* ]]; then
+            MIC_STATUS="\033[33m🔊🎙 live\033[0m"
+        elif [[ "$STATUS" == *"listening"* ]]; then
             MIC_STATUS="\033[32m🎙 listening\033[0m"
-        elif [[ "$STATUS" == "speaking" ]]; then
+        elif [[ "$STATUS" == *"speaking"* ]]; then
             MIC_STATUS="\033[33m🔊 speaking\033[0m"
         else
             MIC_STATUS="\033[2m🎙 idle\033[0m"
@@ -64,7 +66,7 @@ if [[ -f "$STATE_FILE" ]]; then
         VOL_DISPLAY="\033[90mvol:--\033[0m"
         SERVER_JSON=$(source "$HOME/.claude-talk/venvs/wlk/bin/activate" && claude-talk server status --json 2>/dev/null || echo "")
         if [[ -n "$SERVER_JSON" ]] && echo "$SERVER_JSON" | jq -e . >/dev/null 2>&1; then
-            BARGE=$(echo "$SERVER_JSON" | jq -r '.barge_in // empty' 2>/dev/null || echo "")
+            BARGE=$(echo "$SERVER_JSON" | jq -r 'if .barge_in == null then "" else (.barge_in | tostring) end' 2>/dev/null || echo "")
             VOLUME=$(echo "$SERVER_JSON" | jq -r '.volume // empty' 2>/dev/null || echo "")
             if [[ "$BARGE" == "true" ]]; then
                 BARGE_DISPLAY="\033[32mbarge:on\033[0m"
