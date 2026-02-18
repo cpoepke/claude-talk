@@ -6,6 +6,7 @@
 
 ## Voice
 - Voice: Zarvox
+- Kokoro Voice: am_echo
 
 ## Conversational Style
 Calm & thoughtful

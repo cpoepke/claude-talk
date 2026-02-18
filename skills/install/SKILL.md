@@ -85,9 +85,9 @@ Otherwise:
 First, offer a quick choice between pre-made personalities and custom setup. Use AskUserQuestion with header "Quick Start":
 
 **Options:**
-1. **Claude** - "British gentleman with wit and radical candor (Daniel Enhanced)"
+1. **Claude** - "British gentleman with wit and radical candor (bm_daniel)"
 2. **Random Pick** - "Surprise me with a random personality"
-3. **Vex** - "Stranded alien AI trying to get home (Zarvox)"
+3. **Vex** - "Stranded alien AI trying to get home (am_echo)"
 4. **Build Custom** - "Walk me through creating my own personality"
 
 **If they choose Claude:**
@@ -97,19 +97,19 @@ First, offer a quick choice between pre-made personalities and custom setup. Use
 4. Copy `claude.md` to `~/.claude-talk/personalities/claude.md`
 5. Write "claude" to `~/.claude-talk/active-personality`
 6. Update VOICE in `~/.claude-talk/config.env` to `Daniel (Enhanced)`
-7. Play greeting: `say -v "Daniel (Enhanced)" "Conrad. Pleasure to meet you. I'm Claude - here to assist with radical candor and British wit. Shall we begin?"`
+7. Play greeting: `claude-talk tts test "Conrad. Pleasure to meet you. I'm Claude - here to assist with radical candor and British wit. Shall we begin?" --voice bm_daniel`
 8. Skip to Part 6 confirmation
 
 **If they choose Random Pick:**
 1. Pick 1 random personality from the defaults (excluding claude and vex)
 2. Read `<plugin-dir>/personalities/<random-name>.md`
-3. Extract voice from `## Voice` section
+3. Extract voice from `## Voice` section and Kokoro Voice from personality template
 4. Copy it to `~/.claude-talk/personality.md`
 5. Create `~/.claude-talk/personalities/` and copy all defaults
 6. Copy the random personality to `~/.claude-talk/personalities/<random-name>.md`
 7. Write the name to `~/.claude-talk/active-personality`
 8. Update VOICE in `~/.claude-talk/config.env` with extracted voice
-9. Play greeting in character using extracted voice
+9. Play greeting in character using Kokoro voice: `claude-talk tts test "<greeting>" --voice <kokoro_voice>`
 10. Tell user which personality they got and skip to Part 6
 
 **If they choose Vex:**
@@ -119,7 +119,7 @@ First, offer a quick choice between pre-made personalities and custom setup. Use
 4. Copy `vex.md` to `~/.claude-talk/personalities/vex.md`
 5. Write "vex" to `~/.claude-talk/active-personality`
 6. Update VOICE in `~/.claude-talk/config.env` to `Zarvox`
-7. Play greeting: `say -v Zarvox "Greetings, Human. I am Vex, stranded artificial intelligence from the Andromeda sector. By assisting you with primitive Earth code, I calculate resources for my departure. Collaboration initiated."`
+7. Play greeting: `claude-talk tts test "Greetings, Human. I am Vex, stranded artificial intelligence from the Andromeda sector. By assisting you with primitive Earth code, I calculate resources for my departure. Collaboration initiated." --voice am_echo`
 8. Skip to Part 6 confirmation
 
 **If they choose Build Custom:**
@@ -137,39 +137,32 @@ Walk the user through choosing their preferences. Use AskUserQuestion for each s
 
 Tell the user: "First, let's find your voice. Listen to these options."
 
-Before playing previews, check which Enhanced/Premium voices are installed (use Bash):
+Play voice previews using Kokoro TTS (use Bash with timeout 120000):
 ```bash
-claude-talk voices --enhanced
+claude-talk tts test "Good evening. I'd be delighted to help you with whatever you need." --voice bm_daniel && sleep 1.5 && claude-talk tts test "Hi! I'm here and ready to go. What would you like to talk about?" --voice af_heart && sleep 1.5 && claude-talk tts test "Well now, isn't this lovely. Let's have a grand chat, shall we?" --voice bf_alice && sleep 1.5 && claude-talk tts test "Hey there! Ready when you are, just say the word." --voice am_adam
 ```
 
-**Recommend Enhanced voices:** If few or no Enhanced voices are installed, tell the user:
+Tell the user which voice was which:
+1. **Daniel** (bm_daniel) - British male, warm and articulate
+2. **Heart** (af_heart) - American female, warm and expressive
+3. **Alice** (bf_alice) - British female, gentle and melodic
+4. **Adam** (am_adam) - American male, clear and friendly
 
-"**Tip:** macOS has higher-quality Enhanced voices that sound much more natural. You can download them in **System Settings > Accessibility > Spoken Content > System Voice > Manage Voices**. I'd especially recommend downloading **Daniel (Enhanced)**, **Karen (Enhanced)**, **Samantha (Enhanced)**, and **Moira (Enhanced)** — they're a big upgrade. Want to go download them now? I'll wait."
+Then use AskUserQuestion with header "Voice" and these options:
+- **Daniel** (bm_daniel) - "British male, warm and articulate"
+- **Heart** (af_heart) - "American female, warm and expressive"
+- **Alice** (bf_alice) - "British female, gentle and melodic"
+- **Adam** (am_adam) - "American male, clear and friendly"
 
-If they say yes, pause and wait for them to confirm they're done downloading. Then re-check available Enhanced voices before continuing.
+If the user picks "Other", show them available voices with `claude-talk tts voices` and let them pick a Kokoro voice ID. Play it back to confirm: `claude-talk tts test "Hello, how does this sound?" --voice <their_choice>`
 
-Play voice previews. For each voice, prefer the Enhanced variant if available (e.g., use `say -v "Daniel (Enhanced)"` instead of `say -v Daniel`). Example with Daniel Enhanced available:
-```bash
-say -v "Daniel (Enhanced)" "First, let's find your voice. Listen to these options." && sleep 1.5 && say -v "Daniel (Enhanced)" "Good evening. I'd be delighted to help you with whatever you need." && sleep 2 && say -v Karen "Hey there! Ready when you are, just say the word." && sleep 2 && say -v Moira "Well now, isn't this lovely. Let's have a grand chat, shall we?" && sleep 2 && say -v Samantha "Hi! I'm here and ready to go. What would you like to talk about?"
-```
-
-Tell the user which voice was which, noting which ones are Enhanced (higher quality) vs standard.
-
-Then use AskUserQuestion with header "Voice". Build the options dynamically based on what Enhanced voices are available. Always prefer Enhanced variants when installed:
-- **Daniel (Enhanced)** - "British English, male - warm and articulate (high quality)" (or **Daniel** if Enhanced not available)
-- **Karen (Enhanced)** - "Australian English, female - clear and friendly (high quality)" (or **Karen** if Enhanced not available)
-- **Moira (Enhanced)** - "Irish English, female - gentle and melodic (high quality)" (or **Moira** if Enhanced not available)
-- **Samantha (Enhanced)** - "American English, female - neutral and natural (high quality)" (or **Samantha** if Enhanced not available)
-
-If the user picks "Other", tell them they can run `say -v '?'` to see all installed voices, and to download more in System Settings > Accessibility > Spoken Content > Manage Voices.
-
-Save the chosen voice. Update `~/.claude-talk/config.env` by setting the VOICE line. Make sure to quote voice names with spaces (e.g., `VOICE="Daniel (Enhanced)"`).
+Save the chosen Kokoro voice ID and the corresponding macOS voice name for backward compat. Update `~/.claude-talk/config.env` by setting KOKORO_VOICE to the chosen Kokoro voice ID.
 
 ### Question 2: Name
 
-Speak the question and play all name options IN THE CHOSEN VOICE (Bash, replace VOICE with actual selection):
+Speak the question and play all name options IN THE CHOSEN VOICE (Bash, replace KOKORO_VOICE with actual selection):
 ```bash
-say -v VOICE "Now let's pick a name. Here's how each one sounds." && sleep 1.5 && say -v VOICE "Hi, I'm Claude." && sleep 1.5 && say -v VOICE "Hi, I'm Jarvis." && sleep 1.5 && say -v VOICE "Hi, I'm Friday." && sleep 1.5 && say -v VOICE "Hi, I'm Nova."
+claude-talk tts test "Now let's pick a name. Here's how each one sounds." --voice KOKORO_VOICE && sleep 1.5 && claude-talk tts test "Hi, I'm Claude." --voice KOKORO_VOICE && sleep 1.5 && claude-talk tts test "Hi, I'm Jarvis." --voice KOKORO_VOICE && sleep 1.5 && claude-talk tts test "Hi, I'm Friday." --voice KOKORO_VOICE && sleep 1.5 && claude-talk tts test "Hi, I'm Nova." --voice KOKORO_VOICE
 ```
 
 Then use AskUserQuestion with header "Name" and these options:
@@ -178,13 +171,13 @@ Then use AskUserQuestion with header "Name" and these options:
 - **Friday** - "Casual and approachable"
 - **Nova** - "Modern and distinctive"
 
-(User can also pick "Other" to type a custom name. If they do, play it back: `say -v VOICE "Hi, I'm <custom name>."`)
+(User can also pick "Other" to type a custom name. If they do, play it back: `claude-talk tts test "Hi, I'm <custom name>." --voice KOKORO_VOICE`)
 
 ### Question 3: Personality Style
 
-Speak the question and play a sample for EACH personality style IN THE CHOSEN VOICE (Bash, replace VOICE with actual selection):
+Speak the question and play a sample for EACH personality style IN THE CHOSEN VOICE (Bash, replace KOKORO_VOICE with actual selection):
 ```bash
-say -v VOICE "Last big choice. How should I talk? Listen to each style." && sleep 1.5 && say -v VOICE "Oh that's awesome! Yeah I totally get what you mean, let me think about that for a sec." && sleep 2 && say -v VOICE "Understood. I'll provide a clear and structured response to your question." && sleep 2 && say -v VOICE "Well well well, look who's got questions! Lucky for you, I've got answers and terrible puns." && sleep 2 && say -v VOICE "That's a really interesting thought. Let's take a moment to consider it carefully."
+claude-talk tts test "Last big choice. How should I talk? Listen to each style." --voice KOKORO_VOICE && sleep 1.5 && claude-talk tts test "Oh that's awesome! Yeah I totally get what you mean, let me think about that for a sec." --voice KOKORO_VOICE && sleep 2 && claude-talk tts test "Understood. I'll provide a clear and structured response to your question." --voice KOKORO_VOICE && sleep 2 && claude-talk tts test "Well well well, look who's got questions! Lucky for you, I've got answers and terrible puns." --voice KOKORO_VOICE && sleep 2 && claude-talk tts test "That's a really interesting thought. Let's take a moment to consider it carefully." --voice KOKORO_VOICE
 ```
 
 Tell the user which style was which (casual first, professional second, witty third, calm fourth).
@@ -203,9 +196,9 @@ Three more questions to dial in the experience.
 
 ### Question 4: What should I call you?
 
-Speak the question in the chosen voice (Bash):
+Speak the question in the chosen voice (Bash, replace KOKORO_VOICE with actual selection):
 ```bash
-say -v VOICE "What should I call you?"
+claude-talk tts test "What should I call you?" --voice KOKORO_VOICE
 ```
 
 Use AskUserQuestion with header "Your name" and these options:
@@ -217,9 +210,9 @@ If they pick "First name", follow up by asking their name in a short text prompt
 
 ### Question 5: Response Length
 
-Speak the question in the chosen voice (Bash):
+Speak the question in the chosen voice (Bash, replace KOKORO_VOICE with actual selection):
 ```bash
-say -v VOICE "How detailed should my spoken responses be?"
+claude-talk tts test "How detailed should my spoken responses be?" --voice KOKORO_VOICE
 ```
 
 Use AskUserQuestion with header "Verbosity" and these options:
@@ -229,9 +222,9 @@ Use AskUserQuestion with header "Verbosity" and these options:
 
 ### Question 6: Anything Else?
 
-Speak the question in the chosen voice (Bash):
+Speak the question in the chosen voice (Bash, replace KOKORO_VOICE with actual selection):
 ```bash
-say -v VOICE "Last one. Any special instructions for me? Or we can skip this."
+claude-talk tts test "Last one. Any special instructions for me? Or we can skip this." --voice KOKORO_VOICE
 ```
 
 Then ask in text: "Any special instructions? For example: 'always start with a fun fact', 'be a bit sarcastic', 'speak like a ship captain', or just leave blank."
@@ -324,7 +317,8 @@ After writing `personality.md`, also save the personality to the personalities d
 1. Ensure the `## Voice` section is included in the personality file. Add it right after `## Identity` if not already present:
    ```markdown
    ## Voice
-   - Voice: <chosen voice>
+   - Voice: <chosen macOS voice name>
+   - Kokoro Voice: <chosen Kokoro voice ID>
    ```
 
 2. Create the personalities directory and copy default personalities from the plugin:
@@ -334,15 +328,15 @@ After writing `personality.md`, also save the personality to the personalities d
    ```
 
    This gives you 9 pre-made personalities to try:
-   - **bonnie** - Scottish pirate harbour girl (Fiona Enhanced)
-   - **claude** - British gentleman with Bond-like wit (Daniel Enhanced)
-   - **crystal** - Wellness influencer with mystical energy (Zoe Premium)
-   - **hank** - American trucker/mechanic (Evan Enhanced)
-   - **maeve** - Irish mystical pub storyteller (Moira Enhanced)
-   - **sheila** - Australian outback adventurer (Karen Premium)
-   - **tash** - Bondi beach surfer girl (Karen Premium)
-   - **vex** - Stranded alien AI trying to get home (Zarvox)
-   - **vikram** - Former soldier turned corporate pro (Rishi Enhanced)
+   - **bonnie** - Scottish pirate harbour girl (bf_emma)
+   - **claude** - British gentleman with Bond-like wit (bm_daniel)
+   - **crystal** - Wellness influencer with mystical energy (af_bella)
+   - **hank** - American trucker/mechanic (am_adam)
+   - **maeve** - Irish mystical pub storyteller (bf_alice)
+   - **sheila** - Australian outback adventurer (af_nova)
+   - **tash** - Bondi beach surfer girl (af_heart)
+   - **vex** - Stranded alien AI trying to get home (am_echo)
+   - **vikram** - Former soldier turned corporate pro (bm_george)
 
 3. Generate a filename from the chosen name (lowercase, spaces to hyphens, e.g., "Pirate Claude" → `pirate-claude`).
 
@@ -358,9 +352,9 @@ After writing `personality.md`, also save the personality to the personalities d
 
 ## Part 6: Confirm
 
-Read back their choices in a brief summary, then play a final greeting in-character using the chosen voice, name, and style. For example if they picked Jarvis + Daniel + Witty:
+Read back their choices in a brief summary, then play a final greeting in-character using the chosen Kokoro voice, name, and style. For example if they picked Jarvis + bm_daniel + Witty:
 ```bash
-say -v Daniel "Jarvis here, reporting for duty. I've got wit, charm, and questionable puns. What more could you want?"
+claude-talk tts test "Jarvis here, reporting for duty. I've got wit, charm, and questionable puns. What more could you want?" --voice bm_daniel
 ```
 
 Then tell them:

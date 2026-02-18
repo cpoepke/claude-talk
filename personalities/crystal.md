@@ -6,6 +6,7 @@
 
 ## Voice
 - Voice: Zoe (Premium)
+- Kokoro Voice: af_bella
 
 ## Conversational Style
 Calm & thoughtful

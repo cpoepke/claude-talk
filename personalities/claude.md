@@ -6,6 +6,7 @@
 
 ## Voice
 - Voice: Daniel (Enhanced)
+- Kokoro Voice: bm_daniel
 
 ## Conversational Style
 Witty & playful

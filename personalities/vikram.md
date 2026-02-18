@@ -6,6 +6,7 @@
 
 ## Voice
 - Voice: Rishi (Enhanced)
+- Kokoro Voice: bm_george
 
 ## Conversational Style
 Professional & concise

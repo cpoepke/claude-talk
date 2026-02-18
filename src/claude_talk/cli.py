@@ -210,24 +210,34 @@ def set_voice(voice):
 def speak(text):
     """Speak text via TTS using the current session's voice (fire-and-forget)."""
     # Look up voice for the current pane's session
+    # Priority: kokoro_voice from personality > macOS voice > config fallback
     voice = None
     tmux_pane = os.environ.get("TMUX_PANE", "").strip()
     if tmux_pane:
         store = SessionStore(DB())
+        session_id = None
         # Try pane file first
         pane_file = Path.home() / ".claude-talk/sessions" / tmux_pane.replace("%", "pane-")
         if pane_file.exists():
             session_id = pane_file.read_text().strip()
-            if session_id:
-                info = store.get_personality(session_id)
-                if info:
-                    voice = info.get("voice")
         # Fallback: look up by tmux_target in DB
-        if not voice:
+        if not session_id:
             for s in store.list_sessions():
                 if s["status"] == "active" and s.get("tmux_target") == tmux_pane:
-                    voice = s.get("voice")
+                    session_id = s["session_id"]
                     break
+        if session_id:
+            info = store.get_personality(session_id)
+            if info:
+                # Load personality template to check for kokoro_voice field
+                personality_name = info.get("personality")
+                if personality_name and personality_name != "unknown":
+                    from .personality import load_personality
+                    p_info = load_personality(personality_name)
+                    if p_info.get("kokoro_voice"):
+                        voice = p_info["kokoro_voice"]
+                if not voice:
+                    voice = info.get("voice")
     try:
         kwargs: dict = {"text": text}
         if voice:
@@ -759,6 +769,84 @@ def voices(enhanced, as_json):
         for v in vlist:
             tag = " [Enhanced]" if v.get("enhanced") else ""
             click.echo(f"  {v['name']}  {v['lang']}{tag}")
+
+
+# ── TTS commands ─────────────────────────────────────────────────────────────
+
+
+@cli.group()
+def tts():
+    """Kokoro TTS management."""
+
+
+@tts.command("warmup")
+def tts_warmup():
+    """Pre-download Kokoro model and run Metal shader warmup."""
+    from .tts import KokoroTTS
+    from .config import Config
+
+    config = Config()
+    model = config.get("KOKORO_MODEL", KokoroTTS.DEFAULT_MODEL)
+    click.echo(f"Loading Kokoro model: {model}")
+
+    tts_engine = KokoroTTS(model_name=model)
+    tts_engine._load_model()
+
+    if not tts_engine.is_available():
+        click.echo("Failed to load model", err=True)
+        sys.exit(1)
+
+    click.echo("Running Metal shader warmup...")
+    audio = tts_engine.generate_sync("Ready.", voice="bm_daniel")
+    click.echo(f"Kokoro TTS ready ({len(audio)} samples generated)")
+
+
+@tts.command("voices")
+def tts_voices():
+    """List all Kokoro TTS voices."""
+    from .tts import KokoroTTS
+
+    click.echo("Kokoro TTS Voices:")
+    click.echo(f"  {'Voice ID':<20} {'Language':<12} {'Gender'}")
+    click.echo(f"  {'─' * 20} {'─' * 12} {'─' * 8}")
+    for voice_id, (lang, gender) in sorted(KokoroTTS.VOICES.items()):
+        click.echo(f"  {voice_id:<20} {lang:<12} {gender}")
+    click.echo(f"\n  Total: {len(KokoroTTS.VOICES)} voices")
+
+
+@tts.command("test")
+@click.argument("text")
+@click.option("--voice", default=None, help="Kokoro voice ID (e.g., bm_daniel)")
+def tts_test(text, voice):
+    """Generate and play a test phrase with Kokoro TTS."""
+    import sounddevice as sd
+    from .tts import KokoroTTS
+    from .config import Config
+
+    config = Config()
+    model = config.get("KOKORO_MODEL", KokoroTTS.DEFAULT_MODEL)
+    use_voice = voice or config.get("KOKORO_VOICE", KokoroTTS.DEFAULT_VOICE)
+    speed = float(config.get("KOKORO_SPEED", "1.0"))
+
+    click.echo(f"Loading model: {model}")
+    tts_engine = KokoroTTS(model_name=model)
+    tts_engine._load_model()
+
+    if not tts_engine.is_available():
+        click.echo("Failed to load Kokoro model", err=True)
+        sys.exit(1)
+
+    click.echo(f"Generating: \"{text}\" (voice={use_voice}, speed={speed})")
+    audio = tts_engine.generate_sync(text, voice=use_voice, speed=speed)
+
+    if len(audio) == 0:
+        click.echo("No audio generated", err=True)
+        sys.exit(1)
+
+    click.echo(f"Playing {len(audio)} samples at {KokoroTTS.SAMPLE_RATE}Hz...")
+    sd.play(audio, samplerate=KokoroTTS.SAMPLE_RATE)
+    sd.wait()
+    click.echo("Done.")
 
 
 # ── Personality commands ─────────────────────────────────────────────────────

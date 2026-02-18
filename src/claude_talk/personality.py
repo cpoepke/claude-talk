@@ -33,6 +33,11 @@ def _parse_personality(content: str, name: str) -> dict:
     if voice_match:
         result["voice"] = voice_match.group(1).strip()
 
+    # Extract Kokoro voice ID (overrides macOS voice resolution when present)
+    kokoro_match = re.search(r"^- Kokoro Voice:\s*(.+)$", content, re.MULTILINE)
+    if kokoro_match:
+        result["kokoro_voice"] = kokoro_match.group(1).strip()
+
     # Extract style
     style_match = re.search(r"^- Style:\s*(.+)$", content, re.MULTILINE)
     if style_match:

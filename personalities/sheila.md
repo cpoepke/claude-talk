@@ -6,6 +6,7 @@
 
 ## Voice
 - Voice: Karen (Premium)
+- Kokoro Voice: af_nova
 
 ## Conversational Style
 Witty & playful

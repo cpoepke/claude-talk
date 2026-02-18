@@ -6,6 +6,7 @@
 
 ## Voice
 - Voice: Moira (Enhanced)
+- Kokoro Voice: bf_alice
 
 ## Conversational Style
 Calm & thoughtful

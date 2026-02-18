@@ -6,6 +6,7 @@
 
 ## Voice
 - Voice: Evan (Enhanced)
+- Kokoro Voice: am_adam
 
 ## Conversational Style
 Witty & playful

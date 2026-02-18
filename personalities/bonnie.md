@@ -6,6 +6,7 @@
 
 ## Voice
 - Voice: Fiona (Enhanced)
+- Kokoro Voice: bf_emma
 
 ## Conversational Style
 Witty & playful
