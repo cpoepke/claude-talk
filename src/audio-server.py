@@ -192,6 +192,13 @@ class StateManager:
 class WLKManager:
     """Manages WhisperLiveKit subprocess with auto-restart"""
 
+    # Models compatible with mlx-whisper simul-streaming backend
+    VALID_MLX_MODELS = {
+        "tiny.en", "tiny", "base.en", "base", "small.en", "small",
+        "medium.en", "medium", "large-v1", "large-v2", "large-v3",
+        "large-v3-turbo", "large",
+    }
+
     def __init__(self, config: Config):
         self.config = config
         self.port = config.get_int("WLK_PORT", 8090)
@@ -209,6 +216,15 @@ class WLKManager:
         if await self._is_running():
             print(f"WLK already running on port {self.port}")
             return
+
+        # Preflight: validate model before starting
+        model = self.config.get("WLK_MODEL", "small.en")
+        if model not in self.VALID_MLX_MODELS:
+            print(f"[WLK] ERROR: model '{model}' is not compatible with mlx-whisper simul-streaming.", file=sys.stderr, flush=True)
+            print(f"[WLK] Valid models: {', '.join(sorted(self.VALID_MLX_MODELS))}", file=sys.stderr, flush=True)
+            print(f"[WLK] Falling back to 'small.en'", file=sys.stderr, flush=True)
+            model = "small.en"
+        self._validated_model = model
 
         # Build personality prompt to bias Whisper recognition
         self._init_prompt = self._build_personality_prompt()
@@ -235,14 +251,18 @@ class WLKManager:
         return ""
 
     async def _run_wlk(self):
-        """Auto-restart loop for WLK"""
+        """Auto-restart loop for WLK with exponential backoff"""
         wlk_bin = self.venv_path / "bin/wlk"
+        max_retries = 5
+        attempt = 0
         while not self.stop_requested:
-            print(f"[WLK] starting on port {self.port}...", file=sys.stderr, flush=True)
+            attempt += 1
+            print(f"[WLK] starting on port {self.port} (attempt {attempt})...", file=sys.stderr, flush=True)
+            start_time = time.monotonic()
             cmd = [
                 str(wlk_bin),
                 "--model",
-                self.config.get("WLK_MODEL", "small.en"),
+                self._validated_model,
                 "--language",
                 "en",
                 "--backend",
@@ -271,10 +291,13 @@ class WLKManager:
 
             # Drain stderr for crash diagnostics
             exit_code = self.process.returncode if self.process else None
-            print(f"[WLK] process exited with code {exit_code} at {time.strftime('%Y-%m-%d %H:%M:%S')}", file=sys.stderr, flush=True)
+            uptime = time.monotonic() - start_time
+            print(f"[WLK] process exited with code {exit_code} after {uptime:.1f}s at {time.strftime('%Y-%m-%d %H:%M:%S')}", file=sys.stderr, flush=True)
+            last_stderr = ""
             if self.process and self.process.stderr:
                 try:
                     err = self.process.stderr.read().decode(errors="replace")
+                    last_stderr = err
                     if err.strip():
                         print(f"[WLK] stderr output (last 20 lines):", file=sys.stderr, flush=True)
                         for line in err.strip().splitlines()[-20:]:
@@ -285,8 +308,27 @@ class WLKManager:
             if self.stop_requested:
                 return
 
-            print(f"[WLK] restarting in 2s...", file=sys.stderr, flush=True)
-            await asyncio.sleep(2)
+            # If process ran for >30s, it was healthy — reset attempt counter
+            if uptime > 30:
+                attempt = 0
+                backoff = 2
+            else:
+                # Fast crash — exponential backoff: 2s, 4s, 8s, 16s, 32s
+                backoff = min(2 ** attempt, 32)
+
+            # Detect fatal errors that won't self-heal
+            if "incompatible with the provided model" in last_stderr or "RuntimeError" in last_stderr:
+                print(f"[WLK] FATAL: model/config error detected, not retrying", file=sys.stderr, flush=True)
+                state.set(STATUS="wlk_error")
+                return
+
+            if attempt > max_retries:
+                print(f"[WLK] GIVING UP after {max_retries} fast crashes. Check config and restart server.", file=sys.stderr, flush=True)
+                state.set(STATUS="wlk_error")
+                return
+
+            print(f"[WLK] restarting in {backoff}s (attempt {attempt}/{max_retries})...", file=sys.stderr, flush=True)
+            await asyncio.sleep(backoff)
 
     async def _is_running(self) -> bool:
         """Check if WLK is responding on its port"""
