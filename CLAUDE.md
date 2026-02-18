@@ -4,7 +4,7 @@ Voice conversation plugin for Claude Code. **macOS (Apple Silicon) only.**
 
 ## How it works
 
-Mic -> sounddevice (gain) -> WebSocket -> WhisperLiveKit (MLX Metal GPU) -> text -> Claude -> response -> macOS `say` TTS -> speaker
+Mic -> sounddevice (gain) -> webrtcvad -> whisper.cpp (Metal GPU) -> text -> Claude -> response -> Kokoro TTS (MLX Metal GPU) -> speaker
 
 All processing is local except the Claude API call.
 
@@ -27,7 +27,8 @@ All processing is local except the Claude API call.
 - `claude-talk session update-personality|get-personality|set-tmux-target` - Per-session metadata
 - `claude-talk config [KEY=VALUE]` - View/set config
 - `claude-talk devices` - List audio devices
-- `claude-talk voices [--enhanced]` - List macOS TTS voices
+- `claude-talk tts warmup|voices|test` - TTS model management and testing
+- `claude-talk voices [--enhanced]` - List macOS TTS voices (legacy)
 - `claude-talk personality list|switch|active` - Personality management
 - `claude-talk state set KEY VALUE` - Set session state (legacy compat)
 
@@ -54,7 +55,7 @@ All processing is local except the Claude API call.
 ## Key paths
 
 - `src/claude_talk/` - Python package (config, db, session, personality, devices, voices, cli)
-- `src/audio-server.py` - Audio server (TTS, capture, interrupt mode, WLK)
+- `src/audio-server.py` - Audio server (Kokoro TTS, whisper.cpp STT, VAD, barge-in)
 - `.claude/hooks/session-track.sh` - UserPromptSubmit hook (writes CLAUDE_SESSION_ID to current-session file)
 - `.claude/settings.json` - Registers hooks
 - `config/defaults.env` - Default configuration

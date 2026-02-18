@@ -41,8 +41,8 @@ Display this help text to the user:
 Settings are in `~/.claude-talk/config.env`. Key settings:
 - `AUDIO_DEVICE` - Mic index (find with `python3 -c "import sounddevice; print(sounddevice.query_devices())"`)
 - `MIC_GAIN` - Mic gain multiplier (built-in mic needs ~8.0, USB mics ~1.0)
-- `VOICE` - TTS voice (Daniel, Karen, Moira, Samantha)
-- `CAPTURE_MODE` - `wlk` (streaming, default) or `vad` (legacy batch)
+- `KOKORO_VOICE` - Kokoro TTS voice ID (e.g., bm_daniel, af_heart)
+- `KOKORO_SPEED` - TTS speed multiplier (default 1.0)
 
 ### Personalities
 Manage multiple personalities with `/claude-talk:personality`:
@@ -67,8 +67,8 @@ BlackHole is auto-detected. When available, you can interrupt TTS mid-sentence b
 
 ### Troubleshooting
 - **No speech detected**: Check `AUDIO_DEVICE` index and `MIC_GAIN`
-- **Whisper hallucinations**: Increase `MIC_GAIN` or lower `VAD_THRESHOLD`
+- **Whisper hallucinations**: Increase `MIC_GAIN` or adjust `VAD_AGGRESSIVENESS` (0-3)
 - **Barge-in not working**: Ensure system output is set to Multi-Output Device (not just speakers)
-- **Server won't start**: Check if port 8090 is in use: `lsof -i :8090`
+- **Server won't start**: Check if another audio-server process is running
 
 ---

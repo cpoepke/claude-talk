@@ -1,10 +1,7 @@
 click>=8.0
-fastapi
-uvicorn
 sounddevice
 numpy
-websockets
-pydantic
+mlx-audio[tts]
 
 [dev]
 pytest

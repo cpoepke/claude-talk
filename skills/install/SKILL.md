@@ -15,7 +15,7 @@ One-time setup: install dependencies, then personalize your voice assistant.
 
 First, check what's already configured:
 
-1. Check if dependencies are installed: Does `~/.claude-talk/venvs/whisper-live/` directory exist?
+1. Check if dependencies are installed: Does `~/.claude-talk/venvs/wlk/` directory exist?
 2. Check if personality is configured: Does `~/.claude-talk/personality.md` file exist?
 
 If `$ARGUMENTS` contains `--force`:
