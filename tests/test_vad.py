@@ -50,9 +50,9 @@ class VoiceActivityDetector:
                 self._lookback.pop(0)
             if is_speech:
                 self._speech_started = True
+                # Current frame is already the last item in lookback, so no double-append
                 for lb_frame in self._lookback:
                     self._speech_frames.append(lb_frame)
-                self._speech_frames.append(frame_int16.flatten().copy())
                 self._silent_count = 0
                 self._lookback.clear()
         else:
@@ -255,15 +255,14 @@ class TestVADLookback:
         # Now speech starts. The process_frame logic:
         # 1. Appends current frame to lookback (now 4 items)
         # 2. is_speech=True -> copies all 4 lookback frames to speech_frames
-        # 3. Also appends the current frame again to speech_frames
-        # Result: 5 speech_frames = 4 lookback + 1 current
+        # Current frame is already last in lookback — no duplicate append
         mock.is_speech.return_value = True
         vad.process_frame(_make_speech_frame())
 
         # Lookback should have been consumed
         assert len(vad._lookback) == 0
-        # Speech frames: 4 from lookback (3 silence + 1 speech) + 1 current = 5
-        assert len(vad._speech_frames) == 5
+        # Speech frames: 4 from lookback (3 silence + 1 speech that triggered it)
+        assert len(vad._speech_frames) == 4
 
     def test_lookback_capped_at_size(self):
         """Lookback buffer should not exceed _lookback_size."""

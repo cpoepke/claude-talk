@@ -195,14 +195,13 @@ class WhisperEngine:
         self.config = config
         self.model_name = config.get("WHISPER_MODEL", "base.en")
         self._model = None
-        self._model_lock = None  # asyncio.Lock — one transcribe at a time
+        self._model_lock = asyncio.Lock()  # one transcribe at a time
         self._ready = False
 
     async def start(self):
         """Load whisper model in executor thread (~0.5-2s)."""
         self.initial_prompt = self._build_personality_prompt()
-        self._model_lock = asyncio.Lock()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._model = await loop.run_in_executor(None, self._load_model)
         self._ready = True
         print(f"[WHISPER] model ready ({self.model_name})")
@@ -217,7 +216,7 @@ class WhisperEngine:
         segments = []
         def on_segment(seg):
             segments.append(seg.text)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._model_lock:
             await loop.run_in_executor(None, lambda: self._model.transcribe(
                 pcm_float32, new_segment_callback=on_segment))
@@ -299,9 +298,9 @@ class VoiceActivityDetector:
             if is_speech:
                 self._speech_started = True
                 # Prepend lookback buffer to preserve leading consonants
+                # Current frame is already the last item in lookback, so no double-append
                 for lb_frame in self._lookback:
                     self._speech_frames.append(lb_frame)
-                self._speech_frames.append(frame_int16.flatten().copy())
                 self._silent_count = 0
                 self._lookback.clear()
         else:
@@ -465,7 +464,7 @@ class AudioEngine:
             self._tts_playback_done.set()
             return
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         pos = 0
         chunk_size = 1024  # samples per callback
 
@@ -604,7 +603,7 @@ class AudioEngine:
         barge_in_enabled = tts_active and self.barge_in_enabled and self.blackhole_device is not None
         barge_in_triggered = False
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         audio_queue: asyncio.Queue = asyncio.Queue()
         barge_ref_queue: asyncio.Queue = asyncio.Queue()  # ref frames for interrupt detection
         send_ref_queue: asyncio.Queue = asyncio.Queue()   # ref frames for AEC in send path
@@ -918,7 +917,7 @@ class AudioEngine:
                         continue
             finally:
                 print(f"[DEBUG] Audio capture complete, processed {frame_count} frames total", file=sys.stderr, flush=True)
-                if not barge_in_enabled:
+                if not barge_in_enabled and mic_stream.active:
                     mic_stream.stop()
 
         # Start streams

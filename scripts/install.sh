@@ -32,7 +32,7 @@ fi
 
 if [[ "$(uname -m)" != "arm64" ]]; then
     echo "WARNING: Apple Silicon (arm64) recommended for MLX acceleration."
-    echo "Detected: $(uname -m). WhisperLiveKit may fall back to CPU."
+    echo "Detected: $(uname -m). whisper.cpp may fall back to CPU."
 fi
 
 # --- Check for Python 3.12 ---
@@ -142,7 +142,6 @@ CLAUDE_TALK_DIR="$PROJECT_DIR"
 # AUDIO_DEVICE=1
 # MIC_GAIN=8.0
 # VOICE=Daniel
-# CAPTURE_MODE=wlk
 # SILENCE_SECS=2.0
 # BARGE_IN=true
 # BARGE_IN_RATIO=2.0

@@ -23,13 +23,13 @@ class WhisperEngine:
         self.config = config
         self.model_name = config.get("WHISPER_MODEL", "base.en")
         self._model = None
-        self._model_lock = None
+        self._model_lock = asyncio.Lock()
         self._ready = False
 
     async def start(self):
         self.initial_prompt = self._build_personality_prompt()
         self._model_lock = asyncio.Lock()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         self._model = await loop.run_in_executor(None, self._load_model)
         self._ready = True
 
@@ -42,7 +42,7 @@ class WhisperEngine:
         segments = []
         def on_segment(seg):
             segments.append(seg.text)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         async with self._model_lock:
             await loop.run_in_executor(None, lambda: self._model.transcribe(
                 pcm_float32, new_segment_callback=on_segment))
@@ -111,9 +111,9 @@ class TestWhisperEngineConstruction:
         engine = WhisperEngine(MockConfig())
         assert engine._model is None
 
-    def test_model_lock_is_none_before_start(self):
+    def test_model_lock_exists_before_start(self):
         engine = WhisperEngine(MockConfig())
-        assert engine._model_lock is None
+        assert isinstance(engine._model_lock, asyncio.Lock)
 
 
 class TestWhisperEngineStart:
