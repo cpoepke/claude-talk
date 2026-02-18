@@ -249,6 +249,18 @@ def get_volume():
         sys.exit(1)
 
 
+@server.command("set-volume")
+@click.argument("level", type=int)
+def set_volume(level):
+    """Set system volume to a specific level (0-100)."""
+    try:
+        r = _server_request("set_volume", level=level, timeout=2)
+        click.echo(r.get("volume", 50))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 @server.command("volume-up")
 def volume_up():
     """Increase system volume by 10%."""

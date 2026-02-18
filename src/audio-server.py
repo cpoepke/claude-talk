@@ -1171,10 +1171,21 @@ async def handle_volume(params: dict) -> dict:
     return {"ok": True, **v}
 
 
+async def handle_set_volume(params: dict) -> dict:
+    level = params.get("level")
+    if level is None:
+        return {"ok": False, "error": "level is required (0-100)"}
+    level = max(0, min(100, int(level)))
+    result = await _set_volume(level)
+    state.set(VOLUME=str(result["volume"]))
+    return {"ok": True, **result}
+
+
 async def handle_volume_up(params: dict) -> dict:
     current = await _get_volume()
     new_vol = min(100, current["volume"] + 10)
     result = await _set_volume(new_vol)
+    state.set(VOLUME=str(result["volume"]))
     return {"ok": True, **result}
 
 
@@ -1182,6 +1193,7 @@ async def handle_volume_down(params: dict) -> dict:
     current = await _get_volume()
     new_vol = max(0, current["volume"] - 10)
     result = await _set_volume(new_vol)
+    state.set(VOLUME=str(result["volume"]))
     return {"ok": True, **result}
 
 
@@ -1234,6 +1246,7 @@ COMMANDS: dict[str, Any] = {
     "speak": handle_speak,
     "voice": handle_voice,
     "volume": handle_volume,
+    "set_volume": handle_set_volume,
     "volume_up": handle_volume_up,
     "volume_down": handle_volume_down,
     "mute": handle_mute,
