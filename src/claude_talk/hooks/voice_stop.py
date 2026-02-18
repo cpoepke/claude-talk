@@ -72,7 +72,7 @@ def run():
     text = result.get("text", "")
 
     # WLK connection error
-    if text == "(wlk_error)":
+    if text == "(stt_error)":
         _output_decision("block", "Whisper speech recognition is not responding. Ask the user if they want to restart the voice session.")
         return
 
@@ -91,7 +91,7 @@ def run():
             return
         text = result.get("text", "")
 
-        if text == "(wlk_error)":
+        if text == "(stt_error)":
             _output_decision("block", "Whisper speech recognition is not responding. Ask the user if they want to restart the voice session.")
             return
 

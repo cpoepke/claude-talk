@@ -1,6 +1,6 @@
 ---
 name: start
-description: Start a voice conversation with Claude. Launches WhisperLiveKit transcription and a foreground audio capture loop. macOS only.
+description: Start a voice conversation with Claude. Launches whisper.cpp STT and audio capture. macOS only.
 disable-model-invocation: true
 ---
 

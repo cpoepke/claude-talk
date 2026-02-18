@@ -11,7 +11,7 @@ dependencies = [
     "click>=8.0",
     "sounddevice",
     "numpy",
-    "websockets",
+    "mlx-audio[tts]",
 ]
 
 [project.optional-dependencies]

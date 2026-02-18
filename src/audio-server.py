@@ -22,8 +22,7 @@ import asyncio
 import json
 import logging
 import os
-import signal
-import subprocess
+import re
 import sys
 import time
 from datetime import datetime
@@ -32,13 +31,13 @@ from typing import Any
 
 import numpy as np
 import sounddevice as sd
-import websockets
 
 # Claude Talk modules
 sys.path.insert(0, str(Path(__file__).parent))
 from claude_talk.db import DB
 from claude_talk.session import SessionStore
 from claude_talk.tmux import send_to_session
+from claude_talk.tts import KokoroTTS
 
 
 # ============================================================================
@@ -185,52 +184,44 @@ class StateManager:
 
 
 # ============================================================================
-# WLK Subprocess Manager
+# whisper.cpp STT Engine (via pywhispercpp)
 # ============================================================================
 
 
-class WLKManager:
-    """Manages WhisperLiveKit subprocess with auto-restart"""
-
-    # Models compatible with mlx-whisper simul-streaming backend
-    VALID_MLX_MODELS = {
-        "tiny.en", "tiny", "base.en", "base", "small.en", "small",
-        "medium.en", "medium", "large-v1", "large-v2", "large-v3",
-        "large-v3-turbo", "large",
-    }
+class WhisperEngine:
+    """In-process whisper.cpp model via pywhispercpp. No subprocess, no WebSocket."""
 
     def __init__(self, config: Config):
         self.config = config
-        self.port = config.get_int("WLK_PORT", 8090)
-        self.venv_path = Path(config.get("WLK_VENV"))
-        self.process: subprocess.Popen | None = None
-        self.stop_requested = False
+        self.model_name = config.get("WHISPER_MODEL", "base.en")
+        self._model = None
+        self._model_lock = None  # asyncio.Lock — one transcribe at a time
+        self._ready = False
 
     async def start(self):
-        """Start WLK in background with auto-restart loop"""
-        if not (self.venv_path / "bin/activate").exists():
-            print(f"ERROR: WLK venv not found at {self.venv_path}", file=sys.stderr)
-            return
+        """Load whisper model in executor thread (~0.5-2s)."""
+        self.initial_prompt = self._build_personality_prompt()
+        self._model_lock = asyncio.Lock()
+        loop = asyncio.get_event_loop()
+        self._model = await loop.run_in_executor(None, self._load_model)
+        self._ready = True
+        print(f"[WHISPER] model ready ({self.model_name})")
 
-        # Check if already running
-        if await self._is_running():
-            print(f"WLK already running on port {self.port}")
-            return
+    def _load_model(self):
+        from pywhispercpp.model import Model
+        return Model(self.model_name, language="en",
+                     initial_prompt=self.initial_prompt, suppress_blank=True)
 
-        # Preflight: validate model before starting
-        model = self.config.get("WLK_MODEL", "small.en")
-        if model not in self.VALID_MLX_MODELS:
-            print(f"[WLK] ERROR: model '{model}' is not compatible with mlx-whisper simul-streaming.", file=sys.stderr, flush=True)
-            print(f"[WLK] Valid models: {', '.join(sorted(self.VALID_MLX_MODELS))}", file=sys.stderr, flush=True)
-            print(f"[WLK] Falling back to 'small.en'", file=sys.stderr, flush=True)
-            model = "small.en"
-        self._validated_model = model
-
-        # Build personality prompt to bias Whisper recognition
-        self._init_prompt = self._build_personality_prompt()
-
-        # Run in background task
-        asyncio.create_task(self._run_wlk())
+    async def transcribe(self, pcm_float32: np.ndarray) -> str:
+        """Transcribe a float32 PCM array. Returns joined text from all segments."""
+        segments = []
+        def on_segment(seg):
+            segments.append(seg.text)
+        loop = asyncio.get_event_loop()
+        async with self._model_lock:
+            await loop.run_in_executor(None, lambda: self._model.transcribe(
+                pcm_float32, new_segment_callback=on_segment))
+        return " ".join(segments).strip()
 
     def _build_personality_prompt(self) -> str:
         """Build a prompt with personality names so Whisper recognizes them."""
@@ -246,110 +237,105 @@ class WLKManager:
                         break
         if names:
             prompt = "Personalities: " + ", ".join(names) + "."
-            print(f"[WLK] init prompt: {prompt}")
+            print(f"[WHISPER] init prompt: {prompt}")
             return prompt
         return ""
 
-    async def _run_wlk(self):
-        """Auto-restart loop for WLK with exponential backoff"""
-        wlk_bin = self.venv_path / "bin/wlk"
-        max_retries = 5
-        attempt = 0
-        while not self.stop_requested:
-            attempt += 1
-            print(f"[WLK] starting on port {self.port} (attempt {attempt})...", file=sys.stderr, flush=True)
-            start_time = time.monotonic()
-            cmd = [
-                str(wlk_bin),
-                "--model",
-                self._validated_model,
-                "--language",
-                "en",
-                "--backend",
-                "mlx-whisper",
-                "--port",
-                str(self.port),
-                "--pcm-input",
-            ]
-            if self._init_prompt:
-                cmd.extend(["--static-init-prompt", self._init_prompt])
-            self.process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-
-            # Wait for process to exit
-            while self.process and self.process.poll() is None:
-                await asyncio.sleep(0.5)
-                if self.stop_requested:
-                    self.process.terminate()
-                    await asyncio.sleep(1)
-                    if self.process.poll() is None:
-                        self.process.kill()
-                    return
-
-            # Drain stderr for crash diagnostics
-            exit_code = self.process.returncode if self.process else None
-            uptime = time.monotonic() - start_time
-            print(f"[WLK] process exited with code {exit_code} after {uptime:.1f}s at {time.strftime('%Y-%m-%d %H:%M:%S')}", file=sys.stderr, flush=True)
-            last_stderr = ""
-            if self.process and self.process.stderr:
-                try:
-                    err = self.process.stderr.read().decode(errors="replace")
-                    last_stderr = err
-                    if err.strip():
-                        print(f"[WLK] stderr output (last 20 lines):", file=sys.stderr, flush=True)
-                        for line in err.strip().splitlines()[-20:]:
-                            print(f"[WLK]   {line}", file=sys.stderr, flush=True)
-                except Exception as e:
-                    print(f"[WLK] failed to read stderr: {e}", file=sys.stderr, flush=True)
-
-            if self.stop_requested:
-                return
-
-            # If process ran for >30s, it was healthy — reset attempt counter
-            if uptime > 30:
-                attempt = 0
-                backoff = 2
-            else:
-                # Fast crash — exponential backoff: 2s, 4s, 8s, 16s, 32s
-                backoff = min(2 ** attempt, 32)
-
-            # Detect fatal errors that won't self-heal
-            if "incompatible with the provided model" in last_stderr or "RuntimeError" in last_stderr:
-                print(f"[WLK] FATAL: model/config error detected, not retrying", file=sys.stderr, flush=True)
-                state.set(STATUS="wlk_error")
-                return
-
-            if attempt > max_retries:
-                print(f"[WLK] GIVING UP after {max_retries} fast crashes. Check config and restart server.", file=sys.stderr, flush=True)
-                state.set(STATUS="wlk_error")
-                return
-
-            print(f"[WLK] restarting in {backoff}s (attempt {attempt}/{max_retries})...", file=sys.stderr, flush=True)
-            await asyncio.sleep(backoff)
-
-    async def _is_running(self) -> bool:
-        """Check if WLK is responding on its port"""
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection("localhost", self.port), timeout=1.0
-            )
-            writer.close()
-            await writer.wait_closed()
-            return True
-        except (asyncio.TimeoutError, OSError):
-            return False
+    def is_ready(self) -> bool:
+        return self._ready and self._model is not None
 
     async def stop(self):
-        """Stop WLK subprocess"""
-        self.stop_requested = True
-        if self.process and self.process.poll() is None:
-            self.process.terminate()
-            await asyncio.sleep(1)
-            if self.process.poll() is None:
-                self.process.kill()
+        """Release the model."""
+        self._model = None
+        self._ready = False
+
+
+# ============================================================================
+# Voice Activity Detection (webrtcvad)
+# ============================================================================
+
+
+class VoiceActivityDetector:
+    """webrtcvad-based voice activity detection on 20ms frames at 16kHz."""
+
+    def __init__(self, aggressiveness: int = 2, silence_frames: int = 50, sample_rate: int = 16000):
+        import webrtcvad
+        self.vad = webrtcvad.Vad(aggressiveness)
+        self.sample_rate = sample_rate
+        self.silence_frames = silence_frames
+        self.frame_duration_ms = 20
+        self.frame_size = int(sample_rate * self.frame_duration_ms / 1000)  # 320 at 16kHz
+        self.max_frames = 1500  # 30s safety cap
+
+        self._speech_frames: list[np.ndarray] = []
+        self._silent_count = 0
+        self._speech_started = False
+        self._frame_count = 0
+        # Lookback buffer: preserve 100ms of leading audio (5 frames at 20ms)
+        self._lookback: list[np.ndarray] = []
+        self._lookback_size = 5
+
+    def process_frame(self, frame_int16: np.ndarray) -> tuple[bool, np.ndarray | None]:
+        """Process one 20ms frame. Returns (done, float32_utterance_array).
+        done=True with array when silence boundary hit after speech.
+        done=True with None on max_frames safety cap (no speech detected).
+        done=False otherwise."""
+        self._frame_count += 1
+
+        # Convert to bytes for webrtcvad (expects 16-bit PCM)
+        frame_bytes = frame_int16.flatten()[:self.frame_size].astype(np.int16).tobytes()
+
+        try:
+            is_speech = self.vad.is_speech(frame_bytes, self.sample_rate)
+        except Exception:
+            is_speech = False
+
+        if not self._speech_started:
+            # Pre-speech: maintain lookback buffer
+            self._lookback.append(frame_int16.flatten().copy())
+            if len(self._lookback) > self._lookback_size:
+                self._lookback.pop(0)
+
+            if is_speech:
+                self._speech_started = True
+                # Prepend lookback buffer to preserve leading consonants
+                for lb_frame in self._lookback:
+                    self._speech_frames.append(lb_frame)
+                self._speech_frames.append(frame_int16.flatten().copy())
+                self._silent_count = 0
+                self._lookback.clear()
+        else:
+            # During speech
+            self._speech_frames.append(frame_int16.flatten().copy())
+
+            if is_speech:
+                self._silent_count = 0
+            else:
+                self._silent_count += 1
+
+            if self._silent_count >= self.silence_frames:
+                # Utterance complete
+                utterance = np.concatenate(self._speech_frames).astype(np.float32) / 32768.0
+                self.reset()
+                return True, utterance
+
+        # Safety cap
+        if self._frame_count >= self.max_frames:
+            if self._speech_frames:
+                utterance = np.concatenate(self._speech_frames).astype(np.float32) / 32768.0
+                self.reset()
+                return True, utterance
+            self.reset()
+            return True, None
+
+        return False, None
+
+    def reset(self):
+        self._speech_frames.clear()
+        self._silent_count = 0
+        self._speech_started = False
+        self._frame_count = 0
+        self._lookback.clear()
 
 
 # ============================================================================
@@ -377,7 +363,7 @@ def auto_detect_input_device() -> int:
 
 
 class AudioEngine:
-    """Handles mic capture, TTS, interrupt, and WLK transcription"""
+    """Handles mic capture, TTS, interrupt, and whisper.cpp transcription"""
 
     def __init__(self, config: Config, state: StateManager, event_logger: EventLogger):
         self.config = config
@@ -411,8 +397,12 @@ class AudioEngine:
         # TTS settings
         self.voice = config.get("VOICE", "Daniel")
 
-        # WLK settings
-        self.wlk_url = config.get("WLK_URL", "ws://localhost:8090/asr")
+        # Kokoro TTS engine
+        self.kokoro: KokoroTTS | None = None
+        self._tts_stop_event = asyncio.Event()
+        self._tts_playback_done = asyncio.Event()
+        self._playback_stream: sd.OutputStream | None = None
+        self._tts_active = False  # replaces _tts_pid tracking
 
         # Persistent resources
         self.mic_stream: sd.InputStream | None = None
@@ -428,8 +418,6 @@ class AudioEngine:
             except Exception as e:
                 print(f"  Speex AEC: unavailable ({e})", file=sys.stderr)
 
-        # TTS enforcer: track current say PID to prevent overlapping TTS
-        self._tts_pid: int | None = None
         # Track when TTS last finished for post-TTS protection in all capture paths
         self._tts_finished_at: float = 0.0
         # Track last TTS text for echo filtering in continuous listen
@@ -447,91 +435,155 @@ class AudioEngine:
     def _is_muted(self) -> bool:
         return self.state.get("MUTED", "false").lower() == "true"
 
+    # macOS say voice -> Kokoro voice ID static map
+    MACOS_TO_KOKORO = {
+        "Daniel": "bm_daniel", "Daniel (Enhanced)": "bm_daniel",
+        "Fiona": "bf_emma", "Fiona (Enhanced)": "bf_emma",
+        "Zoe": "af_bella", "Zoe (Premium)": "af_bella",
+        "Evan": "am_adam", "Evan (Enhanced)": "am_adam",
+        "Moira": "bf_alice", "Moira (Enhanced)": "bf_alice",
+        "Karen": "af_nova", "Karen (Premium)": "af_nova",
+        "Zarvox": "am_echo",
+        "Rishi": "bm_george", "Rishi (Enhanced)": "bm_george",
+        "Samantha": "af_heart", "Samantha (Enhanced)": "af_heart",
+    }
+
+    def _resolve_kokoro_voice(self, say_voice: str) -> str:
+        """Resolve a macOS say voice name to a Kokoro voice ID."""
+        return self.MACOS_TO_KOKORO.get(say_voice, self.config.get("KOKORO_VOICE", KokoroTTS.DEFAULT_VOICE))
+
+    async def initialize_tts(self):
+        """Load Kokoro TTS model at startup."""
+        model = self.config.get("KOKORO_MODEL", KokoroTTS.DEFAULT_MODEL)
+        self.kokoro = KokoroTTS(model_name=model)
+        await self.kokoro.initialize()
+        print(f"  Kokoro TTS: loaded ({model})")
+
+    async def _play_audio(self, audio: np.ndarray, sample_rate: int):
+        """Play audio through sounddevice OutputStream with stop support."""
+        if len(audio) == 0:
+            self._tts_playback_done.set()
+            return
+
+        loop = asyncio.get_event_loop()
+        pos = 0
+        chunk_size = 1024  # samples per callback
+
+        def callback(outdata, frames, time_info, status):
+            nonlocal pos
+            if self._tts_stop_event.is_set():
+                raise sd.CallbackStop()
+            end = pos + frames
+            if end <= len(audio):
+                outdata[:, 0] = audio[pos:end]
+            else:
+                # Fill partial + silence
+                remaining = len(audio) - pos
+                if remaining > 0:
+                    outdata[:remaining, 0] = audio[pos:]
+                outdata[remaining:, 0] = 0.0
+                raise sd.CallbackStop()
+            pos = end
+
+        def finished():
+            loop.call_soon_threadsafe(self._tts_playback_done.set)
+
+        self._playback_stream = sd.OutputStream(
+            samplerate=sample_rate,
+            channels=1,
+            dtype='float32',
+            blocksize=chunk_size,
+            callback=callback,
+            finished_callback=finished,
+            device=None,  # system default -> Multi-Output -> BlackHole
+        )
+        self._playback_stream.start()
+
+    def _stop_current_tts(self):
+        """Stop current TTS generation and playback."""
+        self._tts_stop_event.set()
+        if self.kokoro:
+            self.kokoro.stop()
+        if self._playback_stream is not None:
+            try:
+                self._playback_stream.stop()
+                self._playback_stream.close()
+            except Exception:
+                pass
+            self._playback_stream = None
+        self._tts_active = False
+
     async def speak(self, text: str, voice: str | None = None) -> int | None:
         """
-        Speak text via macOS `say`. Returns PID if successful, None if failed.
-        Kills any previous TTS process to prevent overlap.
-        Voice param overrides self.voice for this call only (no shared state mutation).
+        Speak text via Kokoro TTS. Returns 1 (sentinel) if successful, None if failed.
+        Stops any previous TTS to prevent overlap.
+        Voice param: can be macOS voice name (resolved via map), Kokoro voice ID, or
+        personality kokoro_voice field.
         """
         use_voice = voice or self.voice
-        # TTS enforcer: kill previous say process if still running
-        if self._tts_pid is not None:
-            try:
-                os.kill(self._tts_pid, signal.SIGTERM)
-                print(f"[TTS] killed previous say (pid={self._tts_pid})", file=sys.stderr, flush=True)
-            except ProcessLookupError:
-                pass
-            self._tts_pid = None
+        # TTS enforcer: stop previous TTS if still active
+        if self._tts_active:
+            self._stop_current_tts()
+            print(f"[TTS] stopped previous TTS", file=sys.stderr, flush=True)
+
+        if not self.kokoro or not self.kokoro.is_available():
+            print(f"[TTS] Kokoro not available", file=sys.stderr, flush=True)
+            return None
+
+        # Resolve voice: if it looks like a Kokoro ID (contains underscore), use directly
+        # Otherwise treat as macOS voice name and resolve via map
+        if "_" in use_voice and use_voice.split("_")[0] in ("af", "am", "bf", "bm", "jf", "jm", "zf", "zm", "ef", "em", "ff", "hf", "hm", "if", "im", "pf", "pm"):
+            kokoro_voice = use_voice
+        else:
+            kokoro_voice = self._resolve_kokoro_voice(use_voice)
+
+        speed = self.config.get_float("KOKORO_SPEED", 1.0)
 
         self.state.set(STATUS="speaking")
         self._last_tts_text = text
-        self.logger.log_event("TTS_START", {"text": text, "voice": use_voice})
+        self.logger.log_event("TTS_START", {"text": text, "voice": kokoro_voice})
+
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "say",
-                "-v",
-                use_voice,
-                text,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            self._tts_pid = proc.pid
-            return proc.pid
+            # Reset stop/done events
+            self._tts_stop_event.clear()
+            self._tts_playback_done.clear()
+            self._tts_active = True
+
+            # Generate audio (runs in thread pool)
+            audio, sample_rate = await self.kokoro.generate(text, kokoro_voice, speed)
+
+            if self._tts_stop_event.is_set():
+                self._tts_active = False
+                return None
+
+            if len(audio) == 0:
+                print(f"[TTS] Kokoro produced empty audio", file=sys.stderr, flush=True)
+                self._tts_active = False
+                return None
+
+            # Start playback
+            await self._play_audio(audio, sample_rate)
+            return 1  # sentinel: TTS is active (callers check tts_pid > 0)
         except Exception as e:
             print(f"TTS failed: {e}", file=sys.stderr)
+            self._tts_active = False
             return None
 
     async def _capture_utterance(self, tts_pid: int = 0, tts_text: str = "", tts_only: bool = False) -> str:
         """
-        Core capture logic: streams mic to WLK, handles interrupt, returns text.
+        Core capture logic: reads mic, runs VAD, transcribes via whisper.cpp.
         If tts_only=True: exits with "(silence)" when TTS finishes naturally (no barge-in).
         """
-        # Health check: wait for WLK to be ready before connecting
-        wlk_port = self.config.get_int("WLK_PORT", 8090)
-        for attempt in range(10):
+        # Check whisper engine readiness
+        if not whisper_engine.is_ready():
+            print(f"[WHISPER] engine not ready, attempting start", file=sys.stderr, flush=True)
             try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection("localhost", wlk_port), timeout=2.0
-                )
-                writer.close()
-                await writer.wait_closed()
-                if attempt > 0:
-                    print(f"[WLK] ready after {attempt + 1} attempts", file=sys.stderr, flush=True)
-                break
-            except (asyncio.TimeoutError, OSError) as e:
-                print(f"[WLK] health check attempt {attempt + 1}/10 failed: {e}", file=sys.stderr, flush=True)
-                if attempt == 9:
-                    print(f"[WLK] not reachable after 10 attempts, giving up", file=sys.stderr, flush=True)
-                    return "(wlk_error)"
-                await asyncio.sleep(1.0)
-
-        # Resilience: retry connection with exponential backoff
-        ws = None
-        max_retries = 3
-        for retry in range(max_retries):
-            try:
-                retry_timeout = min(5.0 * (2 ** retry), 15.0)  # 5s, 10s, 15s
-                ws = await asyncio.wait_for(
-                    websockets.connect(self.wlk_url), timeout=retry_timeout
-                )
-                print(f"[WLK] websocket connected", file=sys.stderr, flush=True)
-                break
-            except (asyncio.TimeoutError, OSError) as e:
-                if retry < max_retries - 1:
-                    backoff = 0.5 * (2 ** retry)  # 0.5s, 1s, 2s
-                    print(f"[WLK] websocket connect attempt {retry + 1}/{max_retries} failed: {e}, retrying in {backoff}s", file=sys.stderr, flush=True)
-                    await asyncio.sleep(backoff)
-                else:
-                    print(f"[WLK] websocket connect failed after {max_retries} attempts: {e}", file=sys.stderr, flush=True)
-                    return "(wlk_error)"
-
-        if ws is None:
-            print(f"[WLK] websocket connection failed, no valid connection established", file=sys.stderr, flush=True)
-            return "(wlk_error)"
+                await whisper_engine.start()
+            except Exception as e:
+                print(f"[WHISPER] failed to start: {e}", file=sys.stderr, flush=True)
+                return "(stt_error)"
 
         text_result = ""
-        last_text_change = 0.0
-        got_text = False
         frame_size = int(self.sample_rate * 0.02)  # 20ms chunks (320 samples, matches AEC frame)
 
         # TTS monitoring
@@ -590,15 +642,14 @@ class AudioEngine:
             )
 
         async def tts_monitor():
-            """Poll TTS process until it exits"""
+            """Monitor TTS playback until it completes"""
             if not tts_active:
                 return
             while not done_event.is_set():
-                try:
-                    os.kill(tts_pid, 0)
-                except ProcessLookupError:
-                    self.logger.log_event("TTS_STOPPED_NATURAL", {"pid": tts_pid})
+                if self._tts_playback_done.is_set():
+                    self.logger.log_event("TTS_STOPPED_NATURAL")
                     self._tts_finished_at = time.monotonic()
+                    self._tts_active = False
                     tts_done_event.set()
                     if tts_only and not barge_in_triggered:
                         # TTS finished naturally, no barge-in — exit immediately
@@ -608,7 +659,7 @@ class AudioEngine:
 
         async def barge_in_monitor():
             """Adaptive interrupt: calibrates mic baseline during TTS, detects speech above it.
-            Buffers all mic frames and replays them to WLK after interrupt so no speech is lost."""
+            Buffers all mic frames and replays them after interrupt so no speech is lost."""
             nonlocal barge_in_triggered
             if not barge_in_enabled:
                 return
@@ -652,7 +703,7 @@ class AudioEngine:
                 if ref_frame is not None:
                     ref_rms = float(np.sqrt(np.mean(ref_frame.astype(np.float64) ** 2)))
 
-                # Apply AEC for the buffered frames (used later for WLK send)
+                # Apply AEC for the buffered frames (used later for transcription)
                 if self.aec is not None and ref_frame is not None:
                     try:
                         mic_frame = self.aec.cancel(mic_frame.flatten(), ref_frame.flatten())
@@ -717,10 +768,7 @@ class AudioEngine:
                     self.logger.log_event("INTERRUPT_DETECTED", {"mic_rms": raw_mic_rms})
                     print(f"BARGE-IN! mic_rms={raw_mic_rms:.0f} (buffered {len(buffered_mic_frames)} frames for replay)", file=sys.stderr)
                     barge_in_triggered = True
-                    try:
-                        os.kill(tts_pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
+                    self._stop_current_tts()
                     tts_done_event.set()
                     # Only replay frames from the trigger point onward
                     # Earlier frames are contaminated with TTS bleed
@@ -735,11 +783,12 @@ class AudioEngine:
 
                 await asyncio.sleep(0.05)
 
-        async def send_audio():
-            """Send mic audio to WLK"""
+        async def audio_capture_and_transcribe():
+            """Capture mic audio, run VAD, transcribe complete utterances via whisper.cpp."""
+            nonlocal text_result
             await tts_done_event.wait()
             self.logger.log_event("CAPTURE_START")
-            print(f"[DEBUG] TTS done, starting audio send", file=sys.stderr, flush=True)
+            print(f"[DEBUG] TTS done, starting audio capture", file=sys.stderr, flush=True)
             if tts_active and not barge_in_triggered:
                 # Wait for TTS audio to actually stop playing (not just process exit)
                 # Monitor ref stream RMS — when it drops to near-zero, speakers are silent
@@ -778,10 +827,9 @@ class AudioEngine:
                 mic_stream.start()
 
             frame_count = 0
-            send_failed = False
             # Post-TTS energy gate: suppress bleed frames after TTS
             # Applies to ALL captures within 5s of TTS finishing (including /listen retries)
-            # With 8x mic gain, TTS bleed through speakers→mic is 500-900 RMS
+            # With 8x mic gain, TTS bleed through speakers->mic is 500-900 RMS
             # Real speech with gain is typically 2000+ RMS
             time_since_tts = time.monotonic() - self._tts_finished_at if self._tts_finished_at > 0 else 999
             remaining_gate = max(0, 3.0 - time_since_tts)
@@ -790,8 +838,18 @@ class AudioEngine:
             gate_consecutive = 0  # require 3+ consecutive loud frames to pass
             if remaining_gate > 0 and not tts_active:
                 print(f"[GATE] Applying post-TTS gate to /listen call ({remaining_gate:.1f}s remaining)", file=sys.stderr, flush=True)
+
+            # Create VAD for this capture session
+            vad_aggressiveness = self.config.get_int("VAD_AGGRESSIVENESS", 2)
+            vad_silence_frames = self.config.get_int("VAD_SILENCE_FRAMES", 50)
+            vad = VoiceActivityDetector(
+                aggressiveness=vad_aggressiveness,
+                silence_frames=vad_silence_frames,
+                sample_rate=self.sample_rate,
+            )
+
             try:
-                while not done_event.is_set() and not send_failed:
+                while not done_event.is_set():
                     try:
                         data = await asyncio.wait_for(audio_queue.get(), timeout=0.5)
                         # Apply AEC to clean residual echo from mic frames
@@ -814,115 +872,54 @@ class AudioEngine:
                             if frame_rms >= energy_gate_rms:
                                 gate_consecutive += 1
                                 if gate_consecutive < 3:
+                                    frame_count += 1
                                     continue  # Not enough consecutive loud frames yet
                                 # Sustained loud audio — disable gate for rest of session
                                 gate_until = 0
                                 print(f"[GATE] speech detected (rms={frame_rms:.0f}), gate disabled", file=sys.stderr, flush=True)
                             else:
                                 gate_consecutive = 0
+                                frame_count += 1
                                 continue
-                        # Resilience: wrap send in exception handler and add rate limiting
-                        try:
-                            await ws.send(data.tobytes())
-                            frame_count += 1
-                            # Rate limiting: prevent overwhelming WLK with rapid frame bursts
-                            if frame_count % 50 == 0:
-                                await asyncio.sleep(0.01)
-                            if frame_count % 100 == 0:
-                                print(f"[DEBUG] Sent {frame_count} frames to WLK", file=sys.stderr, flush=True)
-                        except websockets.exceptions.ConnectionClosed as e:
-                            print(f"[WLK] send failed, connection closed: code={e.code} reason='{e.reason}'", file=sys.stderr, flush=True)
-                            send_failed = True
-                            done_event.set()
-                        except Exception as e:
-                            print(f"[WLK] send failed with unexpected error: {e}", file=sys.stderr, flush=True)
-                            send_failed = True
-                            done_event.set()
+
+                        # Feed frame to VAD
+                        frame_count += 1
+                        vad_done, utterance = vad.process_frame(data.flatten()[:vad.frame_size])
+
+                        if vad_done:
+                            if utterance is None:
+                                # Safety cap hit with no speech
+                                print(f"[VAD] max frames reached, no speech detected", file=sys.stderr, flush=True)
+                                continue
+
+                            # Transcribe the utterance
+                            print(f"[VAD] utterance detected ({len(utterance)/self.sample_rate:.1f}s, {len(utterance)} samples)", file=sys.stderr, flush=True)
+                            try:
+                                transcribed = await whisper_engine.transcribe(utterance)
+                            except Exception as e:
+                                print(f"[WHISPER] transcribe error: {e}", file=sys.stderr, flush=True)
+                                continue
+
+                            # Filter hallucinations (exact and partial matches)
+                            transcribed = re.sub(r'\[(?:Music|INAUDIBLE|BLANK_AUDIO|BLANK[^\]]*)\]?', '', transcribed, flags=re.IGNORECASE)
+                            transcribed = transcribed.strip()
+
+                            if transcribed and len(transcribed) >= 2:
+                                text_result = transcribed
+                                self.logger.log_event("TRANSCRIPTION", {"text": transcribed})
+                                print(f"[WHISPER] transcription: '{transcribed}'", file=sys.stderr, flush=True)
+                                done_event.set()
+                                return
+
+                        if frame_count % 100 == 0:
+                            print(f"[DEBUG] Processed {frame_count} frames", file=sys.stderr, flush=True)
+
                     except asyncio.TimeoutError:
                         continue
             finally:
-                print(f"[DEBUG] Audio send complete, sent {frame_count} frames total", file=sys.stderr, flush=True)
+                print(f"[DEBUG] Audio capture complete, processed {frame_count} frames total", file=sys.stderr, flush=True)
                 if not barge_in_enabled:
                     mic_stream.stop()
-
-        async def recv_transcription():
-            """Receive and accumulate transcription from WLK"""
-            nonlocal text_result, last_text_change, got_text
-            # Don't start unresponsive timer until we're actually sending audio
-            await tts_done_event.wait()
-            idle_since = time.monotonic()
-            msg_count = 0
-
-            while not done_event.is_set():
-                try:
-                    msg = await asyncio.wait_for(ws.recv(), timeout=0.5)
-                    idle_since = time.monotonic()
-                    msg_count += 1
-                except asyncio.TimeoutError:
-                    elapsed = time.monotonic() - idle_since
-                    if got_text and elapsed > 3.0:
-                        # After speech: 3s silence = done
-                        print("[WLK] unresponsive for 3s after speech, ending capture", file=sys.stderr, flush=True)
-                        done_event.set()
-                        return
-                    if not got_text and msg_count == 0 and elapsed > 10.0:
-                        # No messages at all for 10s = WLK likely dead
-                        print("[WLK] no messages received for 10s, WLK may be down", file=sys.stderr, flush=True)
-                        done_event.set()
-                        return
-                    continue
-                except websockets.exceptions.ConnectionClosed as e:
-                    print(f"[WLK] connection closed during recv: code={e.code} reason='{e.reason}'", file=sys.stderr, flush=True)
-                    if got_text and text_result:
-                        print(f"[WLK] preserving partial transcription: '{text_result}'", file=sys.stderr, flush=True)
-                    done_event.set()
-                    return
-
-                d = json.loads(msg)
-                lines_text = " ".join(l.get("text", "") for l in d.get("lines", [])).strip()
-                buffer_text = d.get("buffer_transcription", "").strip()
-                combined = (lines_text + " " + buffer_text).strip()
-
-                # Filter hallucinations (exact and partial matches)
-                import re
-                combined = re.sub(r'\[(?:Music|INAUDIBLE|BLANK_AUDIO|BLANK[^\]]*)\]?', '', combined, flags=re.IGNORECASE)
-                combined = combined.strip()
-
-                if combined and combined != text_result:
-                    text_result = combined
-                    last_text_change = time.monotonic()
-                    print(f"[DEBUG] WLK transcription: '{combined}'", file=sys.stderr, flush=True)
-                    if not got_text:
-                        got_text = True
-                        self.logger.log_event("FIRST_TRANSCRIPTION", {"text": combined})
-                        print("[DEBUG] First text received", file=sys.stderr, flush=True)
-                    else:
-                        self.logger.log_event("TRANSCRIPTION_UPDATE", {"text": combined})
-
-        async def monitor():
-            """Check for end-of-utterance"""
-            await tts_done_event.wait()
-            capture_start = time.monotonic()
-            # After interrupt, user is mid-thought — give them more silence leeway
-            effective_timeout = self.silence_timeout * 2 if barge_in_triggered else self.silence_timeout
-
-            while not done_event.is_set():
-                await asyncio.sleep(0.3)
-                now = time.monotonic()
-
-                if now - capture_start > self.max_duration:
-                    done_event.set()
-                    return
-
-                if got_text and last_text_change > 0:
-                    idle_time = now - last_text_change
-                    if idle_time >= effective_timeout and len(text_result) >= 2:
-                        self.logger.log_event("CAPTURE_END", {
-                            "text": text_result,
-                            "silence_duration": idle_time,
-                        })
-                        done_event.set()
-                        return
 
         # Start streams
         if barge_in_enabled:
@@ -930,28 +927,22 @@ class AudioEngine:
             ref_stream.start()
 
         try:
-            async with ws:
-                tasks = [
-                    asyncio.create_task(tts_monitor()),
-                    asyncio.create_task(barge_in_monitor()),
-                    asyncio.create_task(send_audio()),
-                    asyncio.create_task(recv_transcription()),
-                    asyncio.create_task(monitor()),
-                ]
-                await done_event.wait()
-                for t in tasks:
-                    t.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
+            tasks = [
+                asyncio.create_task(tts_monitor()),
+                asyncio.create_task(barge_in_monitor()),
+                asyncio.create_task(audio_capture_and_transcribe()),
+            ]
+            await done_event.wait()
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         finally:
             # Record TTS finish time for post-TTS protection in subsequent /listen calls
             if tts_active:
                 self._tts_finished_at = time.monotonic()
-                # Also kill say if still running (e.g. capture ended before TTS finished)
-                if self._tts_pid:
-                    try:
-                        os.kill(self._tts_pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
+                # Stop TTS if still active (e.g. capture ended before TTS finished)
+                if self._tts_active:
+                    self._stop_current_tts()
             if barge_in_enabled:
                 mic_stream.stop()
                 mic_stream.close()
@@ -1030,7 +1021,7 @@ state = StateManager()
 log_file = Path.home() / ".claude-talk/audio-server.log"
 event_logger = EventLogger(log_file)
 audio_engine = AudioEngine(config, state, event_logger)
-wlk_manager = WLKManager(config)
+whisper_engine = WhisperEngine(config)
 
 # Session management for tmux routing
 db = DB()
@@ -1045,7 +1036,7 @@ _auto_shutdown_task: asyncio.Task | None = None
 
 def send_transcription_to_claude(text: str) -> None:
     """Send transcription to Claude session(s) via tmux, using name-based routing."""
-    if not text or text in ("(silence)", "(muted)", "(wlk_error)"):
+    if not text or text in ("(silence)", "(muted)", "(stt_error)"):
         return
 
     from claude_talk.routing import parse_route, get_target_sessions
@@ -1077,8 +1068,8 @@ async def _global_listener():
             async with audio_engine.lock:
                 audio_engine.state.set(STATUS="listening")
                 text = await audio_engine._capture_utterance()
-            if not text or text in ("(silence)", "(muted)", "(wlk_error)"):
-                if text == "(wlk_error)":
+            if not text or text in ("(silence)", "(muted)", "(stt_error)"):
+                if text == "(stt_error)":
                     await asyncio.sleep(2)
                 continue
             if len(text.strip()) < 3:
@@ -1152,6 +1143,8 @@ async def handle_status(params: dict) -> dict:
         "blackhole_device": audio_engine.blackhole_device,
         "auto_device": audio_engine._auto_device,
         "voice": audio_engine.voice,
+        "tts_engine": "kokoro",
+        "tts_available": audio_engine.kokoro is not None and audio_engine.kokoro.is_available(),
         "volume": volume_info["volume"],
     }
 
@@ -1169,14 +1162,10 @@ async def handle_speak(params: dict) -> dict:
         try:
             async with audio_engine.lock:
                 if audio_engine._is_muted():
-                    pid = await audio_engine.speak(text, voice=voice)
-                    if pid:
-                        while True:
-                            try:
-                                os.kill(pid, 0)
-                                await asyncio.sleep(0.1)
-                            except ProcessLookupError:
-                                break
+                    tts_pid = await audio_engine.speak(text, voice=voice)
+                    if tts_pid:
+                        # Wait for playback to finish
+                        await audio_engine._tts_playback_done.wait()
                     return
 
                 tts_pid = await audio_engine.speak(text, voice=voice)
@@ -1188,7 +1177,7 @@ async def handle_speak(params: dict) -> dict:
                     result = await audio_engine._capture_utterance(
                         tts_pid=tts_pid, tts_text=text, tts_only=True
                     )
-                    if result and result not in ("(silence)", "(muted)", "(wlk_error)"):
+                    if result and result not in ("(silence)", "(muted)", "(stt_error)"):
                         # Barge-in happened — route the interrupted speech
                         send_transcription_to_claude(result)
                 finally:
@@ -1271,7 +1260,7 @@ async def handle_devices(params: dict) -> dict:
 
 
 async def handle_stop(params: dict) -> dict:
-    await wlk_manager.stop()
+    await whisper_engine.stop()
     state.set(SESSION="stopped")
     asyncio.create_task(_delayed_exit())
     return {"ok": True, "status": "shutting down"}
@@ -1315,11 +1304,10 @@ async def _handle_session_connect(reader: asyncio.StreamReader, writer: asyncio.
         _auto_shutdown_task = None
         print(f"[SESSION] auto-shutdown cancelled", file=sys.stderr, flush=True)
 
-    # Restart WLK if it was stopped (e.g. after auto-shutdown)
-    if not await wlk_manager._is_running():
-        print(f"[SESSION] restarting WLK for new session", file=sys.stderr, flush=True)
-        wlk_manager.stop_requested = False
-        asyncio.create_task(wlk_manager.start())
+    # Restart whisper engine if it was stopped (e.g. after auto-shutdown)
+    if not whisper_engine.is_ready():
+        print(f"[SESSION] restarting whisper engine for new session", file=sys.stderr, flush=True)
+        await whisper_engine.start()
 
     # Send ack
     writer.write(json.dumps({"ok": True, "status": "connected"}).encode() + b"\n")
@@ -1344,11 +1332,11 @@ async def _handle_session_connect(reader: asyncio.StreamReader, writer: asyncio.
 
 async def _auto_shutdown():
     """Auto-shutdown after grace period when all sessions disconnect.
-    Stops WLK but keeps server process alive for reconnection."""
+    Stops whisper engine but keeps server process alive for reconnection."""
     await asyncio.sleep(5)
     if not _session_connections:
-        print(f"[SESSION] no sessions for 5s, stopping WLK (server stays alive)", file=sys.stderr, flush=True)
-        await wlk_manager.stop()
+        print(f"[SESSION] no sessions for 5s, stopping whisper engine (server stays alive)", file=sys.stderr, flush=True)
+        await whisper_engine.stop()
         state.set(SESSION="stopped")
 
 
@@ -1409,7 +1397,7 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 
 
 async def server_main():
-    """Async main: start WLK and Unix socket server."""
+    """Async main: start whisper.cpp STT and Unix socket server."""
     import socket as _socket
 
     socket_path = Path.home() / ".claude-talk/audio-server.sock"
@@ -1419,20 +1407,11 @@ async def server_main():
 
     state.set(SESSION="active", STATUS="idle", MUTED="false")
 
-    # Start WLK
-    await wlk_manager.start()
-    for _ in range(30):
-        try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection("localhost", config.get_int("WLK_PORT", 8090)),
-                timeout=1.0,
-            )
-            writer.close()
-            await writer.wait_closed()
-            print("WLK ready")
-            break
-        except (asyncio.TimeoutError, OSError):
-            await asyncio.sleep(1)
+    # Start whisper.cpp STT engine (in-process, no port to poll)
+    await whisper_engine.start()
+
+    # Initialize Kokoro TTS
+    await audio_engine.initialize_tts()
 
     # Create Unix socket with restrictive permissions
     sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
@@ -1452,7 +1431,7 @@ async def server_main():
     finally:
         listener_task.cancel()
         server.close()
-        await wlk_manager.stop()
+        await whisper_engine.stop()
         state.set(SESSION="stopped")
         event_logger.close()
         if socket_path.exists():

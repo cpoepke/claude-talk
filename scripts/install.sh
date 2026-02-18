@@ -1,7 +1,7 @@
 #!/bin/bash
 # install.sh - Install claude-talk voice chat dependencies
 #
-# Creates Python venvs, installs WhisperLiveKit + audio tools,
+# Creates Python venvs, installs whisper.cpp (pywhispercpp) + audio tools,
 # detects audio devices, and writes user config.
 #
 # Usage:
@@ -70,9 +70,9 @@ fi
 mkdir -p "$HOME/.claude-talk/models"
 mkdir -p "$HOME/.claude-talk/venvs"
 
-# --- WhisperLiveKit venv ---
+# --- whisper.cpp venv ---
 echo ""
-echo "--- Setting up WhisperLiveKit environment ---"
+echo "--- Setting up whisper.cpp environment ---"
 if [[ "$FORCE" == "true" ]] && [[ -d "$WLK_VENV" ]]; then
     echo "Removing existing WLK venv (--force)..."
     rm -rf "$WLK_VENV"
@@ -85,8 +85,27 @@ fi
 
 echo "Installing packages (this may take a few minutes)..."
 "$WLK_VENV/bin/pip" install -q --upgrade pip
-"$WLK_VENV/bin/pip" install -q whisperlivekit mlx-whisper sounddevice websockets numpy
-echo "WhisperLiveKit environment ready."
+echo "(Building pywhispercpp from source with Metal — 3-5 min first time)"
+"$WLK_VENV/bin/pip" install -q "mlx-audio[tts]" sounddevice numpy webrtcvad
+"$WLK_VENV/bin/pip" install -q "git+https://github.com/absadiki/pywhispercpp"
+echo "whisper.cpp environment ready."
+
+# Pre-download Kokoro TTS model and warm up Metal shaders
+echo "Pre-downloading Kokoro TTS model..."
+"$WLK_VENV/bin/python3" -c "
+from mlx_audio.tts.utils import load_model
+m = load_model('mlx-community/Kokoro-82M-bf16')
+for _ in m.generate(text='Ready.', voice='bm_daniel', lang_code='b'): pass
+print('Kokoro TTS ready.')
+" 2>/dev/null || echo "WARNING: Kokoro TTS warmup failed (will retry on first use)"
+
+# Pre-download Whisper model
+echo "Downloading Whisper model (base.en, ~57MB)..."
+"$WLK_VENV/bin/python3" -c "
+from pywhispercpp.model import Model
+m = Model('base.en')
+print('Whisper model ready.')
+" 2>/dev/null || echo "WARNING: Whisper model download failed (will retry on first use)"
 
 # --- VAD venv (lighter, for fallback) ---
 echo ""
