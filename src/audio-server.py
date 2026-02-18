@@ -405,11 +405,13 @@ class AudioEngine:
     def _is_muted(self) -> bool:
         return self.state.get("MUTED", "false").lower() == "true"
 
-    async def speak(self, text: str) -> int | None:
+    async def speak(self, text: str, voice: str | None = None) -> int | None:
         """
         Speak text via macOS `say`. Returns PID if successful, None if failed.
         Kills any previous TTS process to prevent overlap.
+        Voice param overrides self.voice for this call only (no shared state mutation).
         """
+        use_voice = voice or self.voice
         # TTS enforcer: kill previous say process if still running
         if self._tts_pid is not None:
             try:
@@ -421,12 +423,12 @@ class AudioEngine:
 
         self.state.set(STATUS="speaking")
         self._last_tts_text = text
-        self.logger.log_event("TTS_START", {"text": text, "voice": self.voice})
+        self.logger.log_event("TTS_START", {"text": text, "voice": use_voice})
         try:
             proc = await asyncio.create_subprocess_exec(
                 "say",
                 "-v",
-                self.voice,
+                use_voice,
                 text,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
@@ -1008,6 +1010,7 @@ def send_transcription_to_claude(text: str) -> None:
 
     route_type, target_session_id, cleaned_text = parse_route(text)
     session_ids = get_target_sessions(route_type, target_session_id)
+    print(f"[ROUTE] type={route_type} target={target_session_id and target_session_id[:8]} sessions={[s[:8] for s in session_ids]}", file=sys.stderr, flush=True)
 
     if not session_ids:
         print(f"[TMUX] No target sessions found (route: {route_type})", file=sys.stderr)
@@ -1118,16 +1121,13 @@ async def handle_speak(params: dict) -> dict:
     text = params.get("text", "")
     if not text:
         return {"ok": False, "error": "text is required"}
-    voice = params.get("voice")
-    original_voice = audio_engine.voice
-    if voice:
-        audio_engine.voice = voice
+    voice = params.get("voice")  # passed through to speak(), no shared state mutation
 
-    async def _do_tts(voice_to_restore: str):
+    async def _do_tts():
         try:
             async with audio_engine.lock:
                 if audio_engine._is_muted():
-                    pid = await audio_engine.speak(text)
+                    pid = await audio_engine.speak(text, voice=voice)
                     if pid:
                         while True:
                             try:
@@ -1137,7 +1137,7 @@ async def handle_speak(params: dict) -> dict:
                                 break
                     return
 
-                tts_pid = await audio_engine.speak(text)
+                tts_pid = await audio_engine.speak(text, voice=voice)
                 if not tts_pid:
                     return
 
@@ -1153,10 +1153,8 @@ async def handle_speak(params: dict) -> dict:
                     audio_engine.state.set(STATUS="idle")
         except Exception as e:
             print(f"[TTS] Error: {e}", file=sys.stderr, flush=True)
-        finally:
-            audio_engine.voice = voice_to_restore
 
-    asyncio.create_task(_do_tts(original_voice))
+    asyncio.create_task(_do_tts())
     return {"ok": True, "status": "speaking"}
 
 
@@ -1262,6 +1260,12 @@ async def _handle_session_connect(reader: asyncio.StreamReader, writer: asyncio.
         _auto_shutdown_task = None
         print(f"[SESSION] auto-shutdown cancelled", file=sys.stderr, flush=True)
 
+    # Restart WLK if it was stopped (e.g. after auto-shutdown)
+    if not await wlk_manager._is_running():
+        print(f"[SESSION] restarting WLK for new session", file=sys.stderr, flush=True)
+        wlk_manager.stop_requested = False
+        asyncio.create_task(wlk_manager.start())
+
     # Send ack
     writer.write(json.dumps({"ok": True, "status": "connected"}).encode() + b"\n")
     await writer.drain()
@@ -1284,14 +1288,13 @@ async def _handle_session_connect(reader: asyncio.StreamReader, writer: asyncio.
 
 
 async def _auto_shutdown():
-    """Auto-shutdown after grace period when all sessions disconnect."""
+    """Auto-shutdown after grace period when all sessions disconnect.
+    Stops WLK but keeps server process alive for reconnection."""
     await asyncio.sleep(5)
     if not _session_connections:
-        print(f"[SESSION] auto-shutting down (no sessions for 5s)", file=sys.stderr, flush=True)
+        print(f"[SESSION] no sessions for 5s, stopping WLK (server stays alive)", file=sys.stderr, flush=True)
         await wlk_manager.stop()
         state.set(SESSION="stopped")
-        event_logger.close()
-        os._exit(0)
 
 
 # ── Client handler ────────────────────────────────────────────────────────────
