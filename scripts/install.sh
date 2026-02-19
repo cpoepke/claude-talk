@@ -85,9 +85,7 @@ fi
 
 echo "Installing packages (this may take a few minutes)..."
 "$WLK_VENV/bin/pip" install -q --upgrade pip
-echo "(Building pywhispercpp from source with Metal — 3-5 min first time)"
-"$WLK_VENV/bin/pip" install -q "mlx-audio[tts]" sounddevice numpy webrtcvad
-"$WLK_VENV/bin/pip" install -q "git+https://github.com/absadiki/pywhispercpp"
+"$WLK_VENV/bin/pip" install -q "mlx-audio[tts]" sounddevice numpy webrtcvad pywhispercpp
 echo "whisper.cpp environment ready."
 
 # Pre-download Kokoro TTS model and warm up Metal shaders

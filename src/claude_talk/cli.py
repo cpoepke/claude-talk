@@ -150,7 +150,8 @@ def start(spawn_teammates, personalities):
     )
 
     # Wait for readiness (poll Unix socket)
-    for _ in range(15):
+    # Kokoro TTS + whisper.cpp model loading can take 15-25s on first run
+    for _ in range(30):
         try:
             _server_request("status", timeout=1)
             click.echo("Audio server ready")
