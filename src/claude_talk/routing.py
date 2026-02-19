@@ -28,9 +28,8 @@ def parse_route(text: str, store: SessionStore | None = None) -> tuple[str, str 
     # Check for broadcast keywords
     for keyword in BROADCAST_KEYWORDS:
         if keyword in text_lower:
-            # Remove keyword from text
-            cleaned = re.sub(r'\b' + re.escape(keyword) + r'\b', '', text, flags=re.IGNORECASE).strip()
-            return ("broadcast", None, cleaned or text)
+            # Keep full text — teammates should hear the natural phrasing
+            return ("broadcast", None, text)
 
     # Check for personality names
     if store is None:
@@ -49,9 +48,8 @@ def parse_route(text: str, store: SessionStore | None = None) -> tuple[str, str 
         pattern = r'\b' + re.escape(personality) + r'\b[,:]?\s*'
         match = re.search(pattern, text_lower)
         if match:
-            # Remove name from text
-            cleaned = re.sub(pattern, '', text, count=1, flags=re.IGNORECASE).strip()
-            return ("direct", session["session_id"], cleaned or text)
+            # Keep full text including name — feels more natural for the personality
+            return ("direct", session["session_id"], text)
 
     # No name detected - route to primary
     return ("primary", None, text)

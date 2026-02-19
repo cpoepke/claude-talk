@@ -152,12 +152,22 @@ class TeammateManager:
         )
         original_pane = result.stdout.strip()
 
+        # Record existing pane IDs BEFORE splitting (IDs are stable, indices shift)
+        result = subprocess.run(
+            ["tmux", "list-panes", "-t", window_target, "-F", "#{pane_id}"],
+            capture_output=True, text=True, check=True,
+        )
+        existing_pane_ids = set(result.stdout.strip().splitlines())
+
         # Split current window into panes for each teammate
+        new_pane_ids: list[str] = []
         for _ in range(n):
-            subprocess.run(
-                ["tmux", "split-window", "-t", window_target],
+            # -P -F prints the new pane's ID immediately
+            result = subprocess.run(
+                ["tmux", "split-window", "-t", window_target, "-P", "-F", "#{pane_id}"],
                 capture_output=True, text=True, check=True,
             )
+            new_pane_ids.append(result.stdout.strip())
 
         # Apply auto-fit tiled layout and ensure mouse mode is on
         subprocess.run(
@@ -170,45 +180,35 @@ class TeammateManager:
             capture_output=True, text=True,
         )
 
-        # Get all pane indices — last N are the new ones
-        result = subprocess.run(
-            ["tmux", "list-panes", "-t", window_target, "-F", "#{pane_index}"],
-            capture_output=True, text=True, check=True,
-        )
-        all_pane_indices = result.stdout.strip().splitlines()
-        # The original pane(s) come first; new panes are the last N
-        pane_indices = all_pane_indices[-n:]
-
         teammates = []
         for i, name in enumerate(personalities):
-            pane_idx = pane_indices[i]
-            tmux_target = f"{window_target}.{pane_idx}"
+            pane_id = new_pane_ids[i]  # stable ID like %17
 
             personality_info = load_personality(name)
             display_name = personality_info.get("display_name", name)
 
-            # Set pane title for easy identification
+            # Set pane title for easy identification (use pane ID, not index)
             subprocess.run(
-                ["tmux", "select-pane", "-t", tmux_target, "-T", display_name],
+                ["tmux", "select-pane", "-t", pane_id, "-T", display_name],
                 check=True,
             )
 
             # Launch Claude in this pane (in the project dir so it picks up skills/hooks)
             claude_cmd = f"cd {project_dir} && claude {inherited_flags}"
             subprocess.run(
-                ["tmux", "send-keys", "-t", tmux_target, claude_cmd],
+                ["tmux", "send-keys", "-t", pane_id, claude_cmd],
                 check=True,
             )
             subprocess.run(
-                ["tmux", "send-keys", "-t", tmux_target, "C-m"],
+                ["tmux", "send-keys", "-t", pane_id, "C-m"],
                 check=True,
             )
 
-            print(f"Spawned {name} -> {tmux_target}", file=sys.stderr)
+            print(f"Spawned {name} -> {pane_id}", file=sys.stderr)
             teammates.append({
                 "personality": name,
                 "display_name": display_name,
-                "tmux_target": tmux_target,
+                "tmux_target": pane_id,
             })
 
         # Wait for Claude instances to start, then send /claude-talk:start <personality>
@@ -222,9 +222,9 @@ class TeammateManager:
         for t in teammates:
             success = send_to_session(t["tmux_target"], f"/claude-talk:start {t['personality']}")
             if success:
-                print(f"  ✓ Started {t['personality']}", file=sys.stderr)
+                print(f"  ✓ Started {t['personality']} ({t['tmux_target']})", file=sys.stderr)
             else:
-                print(f"  ✗ Failed to start {t['personality']}", file=sys.stderr)
+                print(f"  ✗ Failed to start {t['personality']} ({t['tmux_target']})", file=sys.stderr)
 
         # Select back to original pane so user has focus
         subprocess.run(

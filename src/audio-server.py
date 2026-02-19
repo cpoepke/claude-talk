@@ -888,14 +888,19 @@ class AudioEngine:
 
             frame_count = 0
             # Post-TTS energy gate: suppress bleed frames after TTS
-            # Applies to ALL captures within 5s of TTS finishing (including /listen retries)
-            # With 8x mic gain, TTS bleed through speakers->mic is 500-900 RMS
-            # Real speech with gain is typically 2000+ RMS
+            # Dynamic baseline: calibrate from first 25 frames (~0.5s), then gate at 3x ambient
+            # This adapts to any mic gain, room acoustics, or speaker volume
+            GATE_DURATION = 4.0  # seconds after TTS to enforce energy gate
+            GATE_CALIBRATION_FRAMES = 25  # ~0.5s at 20ms/frame
+            GATE_MULTIPLIER = 3.0  # threshold = ambient_rms * multiplier
+            GATE_RMS_FLOOR = 500   # minimum threshold regardless of calibration
             time_since_tts = time.monotonic() - self._tts_finished_at if self._tts_finished_at > 0 else 999
-            remaining_gate = max(0, 3.0 - time_since_tts)
-            energy_gate_rms = 1000 if (tts_active or remaining_gate > 0) else 0
-            gate_until = time.monotonic() + (3.0 if tts_active else remaining_gate)
+            remaining_gate = max(0, GATE_DURATION - time_since_tts)
+            energy_gate_rms = GATE_RMS_FLOOR if (tts_active or remaining_gate > 0) else 0
+            gate_until = time.monotonic() + (GATE_DURATION if tts_active else remaining_gate)
             gate_consecutive = 0  # require 3+ consecutive loud frames to pass
+            gate_calibration: list[float] = []  # RMS values for dynamic baseline
+            gate_calibrated = not (tts_active or remaining_gate > 0)  # skip calibration if no gate
             if remaining_gate > 0 and not tts_active:
                 print(f"[GATE] Applying post-TTS gate to /listen call ({remaining_gate:.1f}s remaining)", file=sys.stderr, flush=True)
 
@@ -924,11 +929,22 @@ class AudioEngine:
                                 except Exception:
                                     pass
                         # Energy gate: suppress residual TTS bleed after flush
-                        # Requires 3 consecutive loud frames to prevent isolated noise spikes
+                        # Phase 1: calibrate ambient RMS from first N frames
+                        # Phase 2: gate using dynamic threshold (3x ambient)
                         if time.monotonic() < gate_until:
                             frame_rms = float(np.sqrt(np.mean(data.astype(np.float64) ** 2)))
+                            # Calibration phase: collect baseline frames
+                            if not gate_calibrated:
+                                gate_calibration.append(frame_rms)
+                                if len(gate_calibration) >= GATE_CALIBRATION_FRAMES:
+                                    ambient_rms = sum(gate_calibration) / len(gate_calibration)
+                                    energy_gate_rms = max(ambient_rms * GATE_MULTIPLIER, GATE_RMS_FLOOR)
+                                    gate_calibrated = True
+                                    print(f"[GATE] calibrated: ambient={ambient_rms:.0f} threshold={energy_gate_rms:.0f}", file=sys.stderr, flush=True)
+                                frame_count += 1
+                                continue  # always suppress during calibration
                             if frame_count % 100 == 0:
-                                print(f"[GATE] rms={frame_rms:.0f} gate={energy_gate_rms} remaining={gate_until - time.monotonic():.1f}s", file=sys.stderr, flush=True)
+                                print(f"[GATE] rms={frame_rms:.0f} gate={energy_gate_rms:.0f} remaining={gate_until - time.monotonic():.1f}s", file=sys.stderr, flush=True)
                             if frame_rms >= energy_gate_rms:
                                 gate_consecutive += 1
                                 if gate_consecutive < 3:
@@ -936,7 +952,7 @@ class AudioEngine:
                                     continue  # Not enough consecutive loud frames yet
                                 # Sustained loud audio — disable gate for rest of session
                                 gate_until = 0
-                                print(f"[GATE] speech detected (rms={frame_rms:.0f}), gate disabled", file=sys.stderr, flush=True)
+                                print(f"[GATE] speech detected (rms={frame_rms:.0f} > {energy_gate_rms:.0f}), gate disabled", file=sys.stderr, flush=True)
                             else:
                                 gate_consecutive = 0
                                 frame_count += 1
@@ -1150,12 +1166,12 @@ async def _global_listener():
                 audio_engine._listener_paused.set()  # signal that we've actually stopped
                 await audio_engine._listener_resume.wait()
                 audio_engine._listener_paused.clear()
-                # Post-TTS settling: let room reverb die before capturing
-                # Reset _tts_finished_at so energy gate in _capture_utterance gets full 3s window
+                # Post-TTS settling: let room reverb and speaker buffers fully drain
+                # Reset _tts_finished_at so energy gate in _capture_utterance gets full window
                 # (the barge-in capture already consumed most of the original gate time)
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1.0)
                 audio_engine._tts_finished_at = time.monotonic()
-                print(f"[LISTENER] resumed after TTS (gate reset)", file=sys.stderr, flush=True)
+                print(f"[LISTENER] resumed after TTS (gate reset, 1.0s settle)", file=sys.stderr, flush=True)
 
             audio_engine.state.set(STATUS="listening")
             _listener_capture_task = asyncio.create_task(audio_engine._capture_utterance())
