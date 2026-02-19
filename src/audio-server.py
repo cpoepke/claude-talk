@@ -904,8 +904,11 @@ class AudioEngine:
                                 print(f"[WHISPER] transcribe error: {e}", file=sys.stderr, flush=True)
                                 continue
 
-                            # Filter hallucinations — Whisper produces these on noise/silence
-                            transcribed = re.sub(r'[\[\(](?:Music|INAUDIBLE|BLANK_AUDIO|BLANK[^\]\)]*|silence|claps?|chuckles?|laughter|applause|noise|static|PLAYING|LOUD[^\]\)]*|speaking[^\]\)]*)[\]\)]?', '', transcribed, flags=re.IGNORECASE)
+                            # Filter hallucinations — Whisper produces bracketed/parenthesized
+                            # sound annotations on noise/silence. Catch ALL of them generically.
+                            transcribed = re.sub(r'\[[^\]]{1,30}\]', '', transcribed)  # [anything up to 30 chars]
+                            transcribed = re.sub(r'\([^\)]{1,30}\)', '', transcribed)  # (anything up to 30 chars)
+                            transcribed = re.sub(r'\bINAUDIBLE\b', '', transcribed, flags=re.IGNORECASE)
                             transcribed = transcribed.strip()
                             # Drop if only punctuation/whitespace remains
                             if re.fullmatch(r'[\s\.\,\!\?\-]*', transcribed):
