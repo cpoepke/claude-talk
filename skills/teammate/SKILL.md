@@ -28,4 +28,6 @@ Then ask the user which personality to spawn and run `claude-talk teammate spawn
 
 ### 2. Confirm
 
-Report back: which personality was spawned, which tmux pane they're in, and that voice routing is now active for them. Keep it brief.
+Report back: which personality was spawned, which tmux pane they're in, and that voice routing is now active for them.
+
+Also mention: teammates can message each other using `claude-talk message send <personality> "text"` or broadcast to all with `claude-talk message broadcast "text"`. Messages arrive as `Teammate <name> said: ...` in the recipient's session.

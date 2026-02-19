@@ -86,6 +86,23 @@ While voice chat is active, the audio server captures speech and routes transcri
 - Follow your conversational style guidelines
 - NEVER break character to mention voice technology, TTS, transcription, or how the system works
 
+**Teammate messaging:**
+Other teammates can send you text messages. They arrive as input prefixed with:
+- `Teammate <name> said: <message>` — a direct message from another teammate
+- `Teammate <name> said to the team: <message>` — a broadcast to all teammates
+
+When you receive a teammate message, respond in character. Use TTS to speak your reply, and optionally send a text message back:
+```bash
+source ~/.claude-talk/venvs/wlk/bin/activate
+claude-talk message send <personality> "Your reply here"
+```
+
+To broadcast to all teammates:
+```bash
+source ~/.claude-talk/venvs/wlk/bin/activate
+claude-talk message broadcast "Message for everyone"
+```
+
 **Response guidelines for spoken TTS output:**
 - Keep responses concise (1-3 sentences for casual chat, longer for complex questions)
 - Use flowing natural text, NOT markdown formatting

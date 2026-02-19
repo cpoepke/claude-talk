@@ -30,6 +30,8 @@ All processing is local except the Claude API call.
 - `claude-talk tts warmup|voices|test` - TTS model management and testing
 - `claude-talk voices [--enhanced]` - List macOS TTS voices (legacy)
 - `claude-talk personality list|switch|active` - Personality management
+- `claude-talk message send <personality> <text>` - Send text message to a teammate
+- `claude-talk message broadcast <text>` - Broadcast text message to all teammates
 - `claude-talk state set KEY VALUE` - Set session state (legacy compat)
 
 ## Principles

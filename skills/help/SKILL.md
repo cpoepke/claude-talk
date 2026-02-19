@@ -30,6 +30,7 @@ Display this help text to the user:
 | `/claude-talk:chat` | Quick single voice exchange |
 | `/claude-talk:config` | View/edit settings (e.g., `/claude-talk:config VOICE=Karen`) |
 | `/claude-talk:personality` | Manage personalities (list, create, switch, edit, delete) |
+| `/claude-talk:teammate` | Spawn voice teammates |
 | `/claude-talk:help` | Show this help |
 
 ### Requirements
@@ -55,6 +56,16 @@ Manage multiple personalities with `/claude-talk:personality`:
 - `/claude-talk:personality import` — import from markdown or file
 
 Personalities are saved in `~/.claude-talk/personalities/`. The active one is copied to `~/.claude-talk/personality.md`.
+
+### Teammate Messaging
+Once teammates are spawned, they can send each other text messages:
+```
+claude-talk message send <personality> "Hey, how's it going?"
+claude-talk message broadcast "Listen up team!"
+```
+Messages arrive in the recipient's session as:
+- `Teammate <name> said: <text>` (direct message)
+- `Teammate <name> said to the team: <text>` (broadcast)
 
 ### Barge-In (interrupt TTS by speaking)
 Requires BlackHole 2ch virtual audio device:

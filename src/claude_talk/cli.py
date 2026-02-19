@@ -723,6 +723,49 @@ def kill_all():
     manager.kill_all_teammates()
 
 
+# ── Message commands ─────────────────────────────────────────────────────────
+
+
+@cli.group()
+def message():
+    """Send text messages between teammates."""
+
+
+@message.command("send")
+@click.argument("personality")
+@click.argument("text")
+def message_send(personality, text):
+    """Send a message to a teammate by personality name."""
+    manager = _get_teammate_manager()
+    sender = manager.get_current_personality()
+    if not sender:
+        click.echo("Error: Could not detect sender personality (not in an active session pane)", err=True)
+        sys.exit(1)
+
+    if manager.send_message(sender, personality, text):
+        click.echo(f"Message sent to {personality}", err=True)
+    else:
+        click.echo(f"Failed to send message to {personality}", err=True)
+        sys.exit(1)
+
+
+@message.command("broadcast")
+@click.argument("text")
+def message_broadcast(text):
+    """Broadcast a message to all other teammates."""
+    manager = _get_teammate_manager()
+    sender = manager.get_current_personality()
+    if not sender:
+        click.echo("Error: Could not detect sender personality (not in an active session pane)", err=True)
+        sys.exit(1)
+
+    delivered = manager.broadcast_message(sender, text)
+    if delivered:
+        click.echo(f"Broadcast to {len(delivered)} teammates: {', '.join(delivered)}", err=True)
+    else:
+        click.echo("No teammates to broadcast to", err=True)
+
+
 # ── Config commands ──────────────────────────────────────────────────────────
 
 

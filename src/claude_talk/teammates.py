@@ -11,6 +11,7 @@ from .config import Config
 from .db import DB
 from .personality import load_personality
 from .session import SessionStore
+from .tmux import get_current_pane, send_to_session
 
 
 def _get_current_tmux_session() -> str | None:
@@ -281,3 +282,68 @@ class TeammateManager:
             self.kill_teammate(teammate["session_id"])
 
         print(f"Killed {len(teammates)} teammates", file=sys.stderr)
+
+    def get_current_personality(self) -> str | None:
+        """Detect the current pane's personality from the session DB.
+
+        Looks up the current tmux pane ID, finds the active session
+        using that pane as its tmux_target, and returns the personality name.
+        """
+        pane_id = os.environ.get("TMUX_PANE", "").strip() or get_current_pane()
+        if not pane_id:
+            return None
+        for s in self.session_store.list_sessions():
+            if s["status"] == "active" and s.get("tmux_target") == pane_id:
+                p = s.get("personality")
+                return p if p and p != "unknown" else None
+        return None
+
+    def send_message(self, from_personality: str, to_personality: str, text: str) -> bool:
+        """Send a text message from one teammate to another via tmux.
+
+        Args:
+            from_personality: Sender personality name (for the prefix)
+            to_personality: Recipient personality name
+            text: Message text
+
+        Returns:
+            True if delivered, False otherwise
+        """
+        # Find recipient's active session and tmux target
+        target = None
+        for s in self.session_store.list_sessions():
+            if (s["status"] == "active"
+                    and s.get("personality") == to_personality
+                    and s.get("tmux_target")):
+                target = s["tmux_target"]
+                break
+
+        if not target:
+            print(f"Error: No active session for personality '{to_personality}'", file=sys.stderr)
+            return False
+
+        formatted = f"Teammate {from_personality} said: {text}"
+        return send_to_session(target, formatted)
+
+    def broadcast_message(self, from_personality: str, text: str) -> list[str]:
+        """Broadcast a text message to all other active teammates via tmux.
+
+        Args:
+            from_personality: Sender personality name
+            text: Message text
+
+        Returns:
+            List of personality names that received the message
+        """
+        delivered = []
+        formatted = f"Teammate {from_personality} said to the team: {text}"
+
+        for s in self.session_store.list_sessions():
+            if (s["status"] == "active"
+                    and s.get("personality") != from_personality
+                    and s.get("personality") != "unknown"
+                    and s.get("tmux_target")):
+                if send_to_session(s["tmux_target"], formatted):
+                    delivered.append(s["personality"])
+
+        return delivered
