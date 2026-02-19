@@ -141,6 +141,7 @@ class EventLogger:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
         # Append mode, create if doesn't exist
         self.file = open(self.log_file, "a", buffering=1)  # Line buffered
+        os.chmod(self.log_file, 0o600)  # Restrict log to owner-only
         self.log_event("SERVER_START", {"pid": os.getpid()})
 
     def log_event(self, event: str, data: dict[str, Any] | None = None):
@@ -616,6 +617,13 @@ class AudioEngine:
             self._tts_stop_event.clear()
             self._tts_playback_done.clear()
             self._tts_active = True
+
+            # Validate voice name to prevent unexpected arguments
+            import re as _re
+            if not _re.match(r'^[a-zA-Z0-9 ()\-_.]+$', use_voice):
+                print(f"[TTS] Invalid voice name rejected: {use_voice!r}", file=sys.stderr)
+                self._tts_active = False
+                return None
 
             proc = await asyncio.create_subprocess_exec(
                 "say", "-v", use_voice, text,
@@ -1267,6 +1275,7 @@ async def _get_volume() -> dict[str, int]:
 
 
 async def _set_volume(level: int) -> dict[str, int]:
+    level = max(0, min(100, int(level)))  # Defense-in-depth: clamp before interpolation
     try:
         await asyncio.create_subprocess_exec(
             "osascript", "-e", f"set volume output volume {level}",

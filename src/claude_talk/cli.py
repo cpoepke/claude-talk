@@ -56,28 +56,40 @@ def _spawn_session_holder(session_id: str, tmux_target: str):
     blocks forever. When the tmux pane is killed, this process dies too
     (via SIGHUP), and the server detects the socket close for ref counting.
     """
-    # Inline Python script that runs in background
-    script = f"""
-import socket, json, time, sys
+    import re
+    # Validate session_id to prevent code injection (must be UUID format)
+    if not re.match(r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$', session_id):
+        click.echo(f"Invalid session ID format: {session_id}", err=True)
+        return
+
+    # Find the python in the WLK venv (same one running the server)
+    wlk_python = Path.home() / ".claude-talk/venvs/wlk/bin/python3"
+    python = str(wlk_python) if wlk_python.exists() else sys.executable
+
+    # Pass session_id and socket_path via environment variables to avoid
+    # string interpolation into inline Python code (prevents code injection).
+    env = os.environ.copy()
+    env["_CT_SESSION_ID"] = session_id
+    env["_CT_SOCKET_PATH"] = str(_SOCKET_PATH)
+
+    script = """
+import socket, json, time, sys, os
 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
 try:
-    sock.connect("{_SOCKET_PATH}")
-    sock.sendall(json.dumps({{"cmd": "session_connect", "session_id": "{session_id}"}}).encode() + b"\\n")
+    sock.connect(os.environ["_CT_SOCKET_PATH"])
+    sock.sendall(json.dumps({"cmd": "session_connect", "session_id": os.environ["_CT_SESSION_ID"]}).encode() + b"\\n")
     sock.recv(4096)  # read ack
     while True:
         time.sleep(3600)
 except Exception:
     sys.exit(0)
 """
-    # Find the python in the WLK venv (same one running the server)
-    wlk_python = Path.home() / ".claude-talk/venvs/wlk/bin/python3"
-    python = str(wlk_python) if wlk_python.exists() else sys.executable
-
     subprocess.Popen(
         [python, "-c", script],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=False,  # inherit session so SIGHUP kills it with pane
+        env=env,
     )
 
 
@@ -132,7 +144,7 @@ def start(spawn_teammates, personalities):
         pass
 
     # No server running — clean up any stale processes/socket
-    subprocess.run(["pkill", "-f", "audio-server.py"], capture_output=True)
+    subprocess.run(["pkill", "-f", "claude_talk.*audio-server\\.py"], capture_output=True)
     time.sleep(0.3)
     if _SOCKET_PATH.exists():
         _SOCKET_PATH.unlink()
@@ -142,12 +154,14 @@ def start(spawn_teammates, personalities):
     log_path = Path.home() / ".claude-talk/audio-server-stderr.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     stderr_log = open(log_path, "a")
+    os.chmod(log_path, 0o600)  # Restrict log file to owner-only
     subprocess.Popen(
         [str(python), str(server_script)],
         stdout=subprocess.DEVNULL,
         stderr=stderr_log,
         start_new_session=True,
     )
+    stderr_log.close()  # Parent doesn't need the fd after Popen
 
     # Wait for readiness (poll Unix socket)
     # Kokoro TTS + whisper.cpp model loading can take 15-25s on first run

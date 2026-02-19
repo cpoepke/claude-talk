@@ -2,6 +2,7 @@
 
 import math
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -194,9 +195,9 @@ class TeammateManager:
             )
 
             # Launch Claude in this pane (in the project dir so it picks up skills/hooks)
-            claude_cmd = f"cd {project_dir} && claude {inherited_flags}"
+            claude_cmd = f"cd {shlex.quote(str(project_dir))} && claude {inherited_flags}"
             subprocess.run(
-                ["tmux", "send-keys", "-t", pane_id, claude_cmd],
+                ["tmux", "send-keys", "-t", pane_id, "-l", claude_cmd],
                 check=True,
             )
             subprocess.run(

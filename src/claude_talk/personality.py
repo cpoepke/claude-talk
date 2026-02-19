@@ -14,9 +14,19 @@ from .session import SessionStore
 PERSONALITIES_DIR = Path.home() / ".claude-talk/personalities"
 
 
+def _validate_personality_name(name: str) -> bool:
+    """Validate personality name contains only safe characters."""
+    return bool(re.match(r'^[a-zA-Z0-9_-]+$', name))
+
+
 def load_personality(name: str) -> dict:
     """Load a personality template by name from personalities/ directory."""
-    path = PERSONALITIES_DIR / f"{name}.md"
+    if not _validate_personality_name(name):
+        return {}
+    path = (PERSONALITIES_DIR / f"{name}.md").resolve()
+    # Ensure path stays within personalities directory
+    if not str(path).startswith(str(PERSONALITIES_DIR.resolve())):
+        return {}
     if not path.exists():
         return {}
 
@@ -87,7 +97,11 @@ def switch_personality(session_id: str, name: str) -> dict:
     Returns:
         Personality dict with name, voice, style, etc.
     """
-    path = PERSONALITIES_DIR / f"{name}.md"
+    if not _validate_personality_name(name):
+        raise FileNotFoundError(f"Personality '{name}' not found (invalid name)")
+    path = (PERSONALITIES_DIR / f"{name}.md").resolve()
+    if not str(path).startswith(str(PERSONALITIES_DIR.resolve())):
+        raise FileNotFoundError(f"Personality '{name}' not found (invalid path)")
     if not path.exists():
         raise FileNotFoundError(f"Personality '{name}' not found")
 

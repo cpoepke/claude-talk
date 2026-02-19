@@ -47,6 +47,7 @@ class DB:
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
+        self.conn.execute("PRAGMA busy_timeout=5000")  # Wait up to 5s for write locks
         self.conn.executescript(SCHEMA)
         self._migrate_voice_column()
 

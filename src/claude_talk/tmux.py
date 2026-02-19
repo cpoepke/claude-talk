@@ -26,9 +26,10 @@ def send_to_session(tmux_target: str, text: str) -> bool:
             print(f"Error: tmux session '{tmux_target}' not found", file=sys.stderr)
             return False
 
-        # Send the text, brief pause, then Enter
+        # Send the text in literal mode (-l) to prevent tmux key-name
+        # interpretation (e.g. "C-c" as Ctrl+C), then Enter separately.
         subprocess.run(
-            ["tmux", "send-keys", "-t", tmux_target, text],
+            ["tmux", "send-keys", "-t", tmux_target, "-l", text],
             check=True,
         )
         import time

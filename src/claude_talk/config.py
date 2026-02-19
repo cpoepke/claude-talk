@@ -34,14 +34,17 @@ class Config:
             self.values[key.strip()] = val
 
         # Second pass: expand variables now that all are loaded
+        # Only expand config-internal vars and $HOME — never arbitrary env vars
         for key in list(self.values.keys()):
             original = self.values[key]
-            # Expand $HOME and ${VAR} using both os.environ and self.values
             expanded = original
             for var_key, var_val in self.values.items():
                 expanded = expanded.replace(f"${{{var_key}}}", var_val)
                 expanded = expanded.replace(f"${var_key}", var_val)
-            expanded = os.path.expandvars(expanded)
+            # Only expand $HOME and ~, not arbitrary env vars
+            expanded = expanded.replace("$HOME", str(Path.home()))
+            expanded = expanded.replace("${HOME}", str(Path.home()))
+            expanded = os.path.expanduser(expanded)
             self.values[key] = expanded
 
     def get(self, key: str, default: str = "") -> str:
