@@ -349,6 +349,12 @@ class VoiceActivityDetector:
 
         return False, None
 
+    def get_partial(self) -> np.ndarray | None:
+        """Return accumulated speech as float32, or None if no speech collected."""
+        if self._speech_started and self._speech_frames:
+            return np.concatenate(self._speech_frames).astype(np.float32) / 32768.0
+        return None
+
     def reset(self):
         self._speech_frames.clear()
         self._silent_count = 0
@@ -446,6 +452,8 @@ class AudioEngine:
         self._tts_finished_at: float = 0.0
         # Track last TTS text for echo filtering in continuous listen
         self._last_tts_text: str = ""
+        # Rescued partial audio when capture is cancelled mid-speech for TTS
+        self._rescued_audio: np.ndarray | None = None
 
         print(f"AudioEngine initialized:")
         print(f"  Mic device: {self.device_index}, gain: {self.gain}")
@@ -1004,6 +1012,14 @@ class AudioEngine:
 
                     except asyncio.TimeoutError:
                         continue
+            except asyncio.CancelledError:
+                # Rescue partial speech: if VAD has buffered speech frames, save them
+                # so the global listener can transcribe them after TTS finishes
+                partial = vad.get_partial()
+                if partial is not None and len(partial) / self.sample_rate >= 0.3:
+                    self._rescued_audio = partial
+                    print(f"[VAD] rescued partial utterance ({len(partial)/self.sample_rate:.1f}s)", file=sys.stderr, flush=True)
+                raise
             finally:
                 print(f"[DEBUG] Audio capture complete, processed {frame_count} frames total", file=sys.stderr, flush=True)
                 if not barge_in_enabled and mic_stream.active:
@@ -1179,6 +1195,31 @@ async def _global_listener():
                 text = await _listener_capture_task
             except asyncio.CancelledError:
                 print(f"[LISTENER] capture cancelled for TTS", file=sys.stderr, flush=True)
+                # Rescue partial speech that was buffered when TTS interrupted
+                rescued = audio_engine._rescued_audio
+                audio_engine._rescued_audio = None
+                if rescued is not None:
+                    try:
+                        transcribed = await whisper_engine.transcribe(rescued)
+                        transcribed = re.sub(r'\[[^\]]{1,30}\]', '', transcribed)
+                        transcribed = re.sub(r'\([^\)]{1,30}\)', '', transcribed)
+                        transcribed = re.sub(r'\bINAUDIBLE\b', '', transcribed, flags=re.IGNORECASE)
+                        transcribed = transcribed.strip()
+                        if re.fullmatch(r'[\s\.\,\!\?\-]*', transcribed):
+                            transcribed = ""
+                        if transcribed:
+                            _lower = transcribed.lower().strip().rstrip(".,!?")
+                            if _lower in _WHISPER_HALLUCINATION_BLOCKLIST:
+                                print(f"[WHISPER] blocked rescued hallucination: '{transcribed}'", file=sys.stderr, flush=True)
+                                transcribed = ""
+                        if transcribed and len(transcribed) >= 2 and len(transcribed.strip().split()) >= 2:
+                            audio_engine.logger.log_event("TRANSCRIPTION", {"text": transcribed, "rescued": True})
+                            print(f"[LISTENER] rescued transcription: '{transcribed}'", file=sys.stderr, flush=True)
+                            send_transcription_to_claude(transcribed)
+                        elif transcribed:
+                            print(f"[LISTENER] dropping short rescued utterance: '{transcribed}'", file=sys.stderr, flush=True)
+                    except Exception as e:
+                        print(f"[LISTENER] rescued transcription error: {e}", file=sys.stderr, flush=True)
                 continue
             finally:
                 _listener_capture_task = None
