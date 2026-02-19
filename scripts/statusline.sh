@@ -1,6 +1,6 @@
 #!/bin/bash
 # statusline.sh - Claude Code statusline with voice state indicator
-# Format: Model | Dir | git | [Personality] | [mic status] | ⚡interrupt:[on/off/--] | vol:[n%/--]
+# Format: Model | Dir | git | [Personality] | [mic status] | [✓model/✗srv/✗stt] | ⚡interrupt:[on/off/--] | vol:[n%/--]
 
 set -euo pipefail
 
@@ -68,14 +68,20 @@ if [[ -f "$STATE_FILE" ]]; then
             MIC_STATUS="\033[2m🎙 idle\033[0m"
         fi
 
-        # Server health + fields — default "--" when server unreachable
-        SRV_HEALTH="\033[31msrv:✗\033[0m"
-        WLK_HEALTH="\033[31mwlk:✗\033[0m"
+        # Smart health indicator + fields — default "--" when server unreachable
+        HEALTH_DISPLAY="\033[31m✗srv\033[0m"
         BARGE_DISPLAY="\033[90m⚡interrupt:--\033[0m"
         VOL_DISPLAY="\033[90mvol:--\033[0m"
         SERVER_JSON=$(source "$HOME/.claude-talk/venvs/wlk/bin/activate" && claude-talk server status --json 2>/dev/null || echo "")
         if [[ -n "$SERVER_JSON" ]] && echo "$SERVER_JSON" | jq -e . >/dev/null 2>&1; then
-            SRV_HEALTH="\033[32msrv:✓\033[0m"
+            # Server reachable — check STT
+            STT_AVAIL=$(echo "$SERVER_JSON" | jq -r 'if .stt_available == null then "" else (.stt_available | tostring) end' 2>/dev/null || echo "")
+            STT_MODEL=$(echo "$SERVER_JSON" | jq -r '.stt_model // empty' 2>/dev/null || echo "")
+            if [[ "$STT_AVAIL" == "true" && -n "$STT_MODEL" ]]; then
+                HEALTH_DISPLAY="\033[32m✓${STT_MODEL}\033[0m"
+            else
+                HEALTH_DISPLAY="\033[31m✗stt\033[0m"
+            fi
             BARGE=$(echo "$SERVER_JSON" | jq -r 'if .barge_in == null then "" else (.barge_in | tostring) end' 2>/dev/null || echo "")
             VOLUME=$(echo "$SERVER_JSON" | jq -r '.volume // empty' 2>/dev/null || echo "")
             if [[ "$BARGE" == "true" ]]; then
@@ -86,15 +92,10 @@ if [[ -f "$STATE_FILE" ]]; then
             [[ -n "$VOLUME" ]] && VOL_DISPLAY="\033[37mvol:${VOLUME}%\033[0m"
         fi
 
-        # WLK health check (quick TCP probe)
-        if python3 -c "import socket; s=socket.socket(); s.settimeout(0.5); s.connect(('localhost', 8090)); s.close()" 2>/dev/null; then
-            WLK_HEALTH="\033[32mwlk:✓\033[0m"
-        fi
-
         SEP="\033[2m|\033[0m"
         SESSION_PART=""
         [[ -n "$SESSION_SHORT" ]] && SESSION_PART="\033[90m${SESSION_SHORT}\033[0m ${SEP} "
-        VOICE_BLOCK="${SESSION_PART}\033[${PERSONALITY_COLOR}m${PERSONALITY_DISPLAY}\033[0m ${SEP} ${MIC_STATUS} ${SEP} ${SRV_HEALTH} ${SEP} ${WLK_HEALTH} ${SEP} ${BARGE_DISPLAY} ${SEP} ${VOL_DISPLAY}"
+        VOICE_BLOCK="${SESSION_PART}\033[${PERSONALITY_COLOR}m${PERSONALITY_DISPLAY}\033[0m ${SEP} ${MIC_STATUS} ${SEP} ${HEALTH_DISPLAY} ${SEP} ${BARGE_DISPLAY} ${SEP} ${VOL_DISPLAY}"
     fi
 fi
 

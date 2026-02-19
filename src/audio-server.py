@@ -1176,6 +1176,10 @@ async def handle_status(params: dict) -> dict:
         "voice": audio_engine.voice,
         "tts_engine": "kokoro",
         "tts_available": audio_engine.kokoro is not None and audio_engine.kokoro.is_available(),
+        "stt_engine": "whisper.cpp",
+        "stt_model": whisper_engine.model_name,
+        "stt_available": whisper_engine.is_ready(),
+        "vad_aggressiveness": config.get_int("VAD_AGGRESSIVENESS", 2),
         "volume": volume_info["volume"],
     }
 
