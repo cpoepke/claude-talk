@@ -407,6 +407,11 @@ class AudioEngine:
         self.mic_stream: sd.InputStream | None = None
         self.ref_stream: sd.InputStream | None = None
         self.lock = asyncio.Lock()  # Serialize capture operations
+        # Listener pause/resume: TTS sets _listener_pause to pause the global listener
+        self._listener_pause = asyncio.Event()   # set = listener should pause
+        self._listener_paused = asyncio.Event()  # set = listener has actually paused
+        self._listener_resume = asyncio.Event()  # set = listener can resume
+        self._listener_resume.set()  # start in resumed state
 
         # Acoustic Echo Cancellation (Speex)
         self.aec = None
@@ -899,9 +904,12 @@ class AudioEngine:
                                 print(f"[WHISPER] transcribe error: {e}", file=sys.stderr, flush=True)
                                 continue
 
-                            # Filter hallucinations (exact and partial matches)
-                            transcribed = re.sub(r'\[(?:Music|INAUDIBLE|BLANK_AUDIO|BLANK[^\]]*)\]?', '', transcribed, flags=re.IGNORECASE)
+                            # Filter hallucinations — Whisper produces these on noise/silence
+                            transcribed = re.sub(r'[\[\(](?:Music|INAUDIBLE|BLANK_AUDIO|BLANK[^\]\)]*|silence|claps?|chuckles?|laughter|applause|noise|static|PLAYING|LOUD[^\]\)]*|speaking[^\]\)]*)[\]\)]?', '', transcribed, flags=re.IGNORECASE)
                             transcribed = transcribed.strip()
+                            # Drop if only punctuation/whitespace remains
+                            if re.fullmatch(r'[\s\.\,\!\?\-]*', transcribed):
+                                transcribed = ""
 
                             if transcribed and len(transcribed) >= 2:
                                 text_result = transcribed
@@ -1060,13 +1068,34 @@ def send_transcription_to_claude(text: str) -> None:
             print(f"[TMUX] Failed to send to {tmux_target}", file=sys.stderr)
 
 
+_listener_capture_task: asyncio.Task | None = None
+
+
 async def _global_listener():
-    """Single global capture loop. Acquires lock per-capture, yields to TTS."""
+    """Single global capture loop. Runs WITHOUT the lock so TTS can interrupt.
+    When TTS needs to speak, it sets audio_engine._listener_pause, which causes
+    us to cancel any active capture and wait until TTS is done."""
+    global _listener_capture_task
     while True:
         try:
-            async with audio_engine.lock:
-                audio_engine.state.set(STATUS="listening")
-                text = await audio_engine._capture_utterance()
+            # Wait if TTS has paused us
+            if audio_engine._listener_pause.is_set():
+                audio_engine.state.set(STATUS="idle")
+                print(f"[LISTENER] paused for TTS", file=sys.stderr, flush=True)
+                audio_engine._listener_paused.set()  # signal that we've actually stopped
+                await audio_engine._listener_resume.wait()
+                audio_engine._listener_paused.clear()
+                print(f"[LISTENER] resumed after TTS", file=sys.stderr, flush=True)
+
+            audio_engine.state.set(STATUS="listening")
+            _listener_capture_task = asyncio.create_task(audio_engine._capture_utterance())
+            try:
+                text = await _listener_capture_task
+            except asyncio.CancelledError:
+                print(f"[LISTENER] capture cancelled for TTS", file=sys.stderr, flush=True)
+                continue
+            finally:
+                _listener_capture_task = None
             if not text or text in ("(silence)", "(muted)", "(stt_error)"):
                 if text == "(stt_error)":
                     await asyncio.sleep(2)
@@ -1149,21 +1178,32 @@ async def handle_status(params: dict) -> dict:
 
 
 async def handle_speak(params: dict) -> dict:
-    """Fire-and-forget TTS with barge-in support. Holds lock during TTS, releases when done.
+    """Fire-and-forget TTS with barge-in support. Pauses global listener during TTS.
     If user interrupts (barge-in): captures interrupted speech and routes it.
-    If TTS finishes naturally: releases lock immediately, global listener captures user response."""
+    If TTS finishes naturally: resumes global listener for next capture."""
     text = params.get("text", "")
     if not text:
         return {"ok": False, "error": "text is required"}
     voice = params.get("voice")  # passed through to speak(), no shared state mutation
 
     async def _do_tts():
+        global _listener_capture_task
         try:
-            async with audio_engine.lock:
+            # Pause global listener: signal pause, cancel active capture, wait for stop
+            audio_engine._listener_pause.set()
+            audio_engine._listener_resume.clear()
+            if _listener_capture_task and not _listener_capture_task.done():
+                _listener_capture_task.cancel()
+            # Wait for listener to actually pause (with timeout)
+            try:
+                await asyncio.wait_for(audio_engine._listener_paused.wait(), timeout=2.0)
+            except asyncio.TimeoutError:
+                print(f"[TTS] Warning: listener didn't pause in time, proceeding", file=sys.stderr, flush=True)
+
+            try:
                 if audio_engine._is_muted():
                     tts_pid = await audio_engine.speak(text, voice=voice)
                     if tts_pid:
-                        # Wait for playback to finish
                         await audio_engine._tts_playback_done.wait()
                     return
 
@@ -1181,8 +1221,17 @@ async def handle_speak(params: dict) -> dict:
                         send_transcription_to_claude(result)
                 finally:
                     audio_engine.state.set(STATUS="idle")
+            finally:
+                # Resume global listener
+                audio_engine._listener_pause.clear()
+                audio_engine._listener_resume.set()
         except Exception as e:
+            import traceback
             print(f"[TTS] Error: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            # Ensure listener resumes even on error
+            audio_engine._listener_pause.clear()
+            audio_engine._listener_resume.set()
 
     asyncio.create_task(_do_tts())
     return {"ok": True, "status": "speaking"}
