@@ -210,6 +210,8 @@ def set_voice(voice):
 @click.argument("text")
 def speak(text):
     """Speak text via TTS using the current session's voice (fire-and-forget)."""
+    # Strip bash history expansion escapes (! → \! in double-quoted strings)
+    text = text.replace("\\!", "!").replace("\\?", "?")
     # Look up voice for the current pane's session
     # Priority: kokoro_voice from personality > macOS voice > config fallback
     voice = None

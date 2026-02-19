@@ -1088,7 +1088,12 @@ async def _global_listener():
                 audio_engine._listener_paused.set()  # signal that we've actually stopped
                 await audio_engine._listener_resume.wait()
                 audio_engine._listener_paused.clear()
-                print(f"[LISTENER] resumed after TTS", file=sys.stderr, flush=True)
+                # Post-TTS settling: let room reverb die before capturing
+                # Reset _tts_finished_at so energy gate in _capture_utterance gets full 3s window
+                # (the barge-in capture already consumed most of the original gate time)
+                await asyncio.sleep(0.5)
+                audio_engine._tts_finished_at = time.monotonic()
+                print(f"[LISTENER] resumed after TTS (gate reset)", file=sys.stderr, flush=True)
 
             audio_engine.state.set(STATUS="listening")
             _listener_capture_task = asyncio.create_task(audio_engine._capture_utterance())
