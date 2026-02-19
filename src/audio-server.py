@@ -39,6 +39,26 @@ from claude_talk.session import SessionStore
 from claude_talk.tmux import send_to_session
 from claude_talk.tts import KokoroTTS
 
+# Known Whisper hallucinations from YouTube training data
+_WHISPER_HALLUCINATION_BLOCKLIST = frozenset({
+    "thanks for watching",
+    "thank you for watching",
+    "thanks for listening",
+    "thank you for listening",
+    "please subscribe",
+    "subscribe",
+    "like and subscribe",
+    "please like and subscribe",
+    "see you next time",
+    "see you in the next video",
+    "see you in the next one",
+    "bye bye",
+    "goodbye",
+    "thank you",
+    "thanks",
+    "you",
+})
+
 
 # ============================================================================
 # Speex Acoustic Echo Cancellation
@@ -913,6 +933,12 @@ class AudioEngine:
                             # Drop if only punctuation/whitespace remains
                             if re.fullmatch(r'[\s\.\,\!\?\-]*', transcribed):
                                 transcribed = ""
+                            # Blocklist: common Whisper hallucinations from YouTube training data
+                            if transcribed:
+                                _lower = transcribed.lower().strip().rstrip(".,!?")
+                                if _lower in _WHISPER_HALLUCINATION_BLOCKLIST:
+                                    print(f"[WHISPER] blocked hallucination: '{transcribed}'", file=sys.stderr, flush=True)
+                                    transcribed = ""
 
                             if transcribed and len(transcribed) >= 2:
                                 text_result = transcribed
@@ -1108,7 +1134,8 @@ async def _global_listener():
                 if text == "(stt_error)":
                     await asyncio.sleep(2)
                 continue
-            if len(text.strip()) < 3:
+            if len(text.strip()) < 3 or len(text.strip().split()) < 2:
+                print(f"[LISTENER] dropping short utterance: '{text.strip()}'", file=sys.stderr, flush=True)
                 continue
             # Echo filter: TTS bleed may reach global listener after TTS releases lock
             echo_text = audio_engine._last_tts_text
