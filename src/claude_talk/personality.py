@@ -38,6 +38,11 @@ def _parse_personality(content: str, name: str) -> dict:
     if kokoro_match:
         result["kokoro_voice"] = kokoro_match.group(1).strip()
 
+    # Extract TTS engine preference (kokoro or say)
+    engine_match = re.search(r"^- TTS Engine:\s*(.+)$", content, re.MULTILINE)
+    if engine_match:
+        result["tts_engine"] = engine_match.group(1).strip().lower()
+
     # Extract style
     style_match = re.search(r"^- Style:\s*(.+)$", content, re.MULTILINE)
     if style_match:

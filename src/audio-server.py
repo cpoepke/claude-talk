@@ -593,6 +593,42 @@ class AudioEngine:
             self._tts_active = False
             return None
 
+    async def speak_say(self, text: str, voice: str | None = None) -> int | None:
+        """Speak text via macOS 'say' command. Returns PID if successful, None if failed."""
+        use_voice = voice or self.voice
+        if self._tts_active:
+            self._stop_current_tts()
+            print(f"[TTS] stopped previous TTS", file=sys.stderr, flush=True)
+
+        self.state.set(STATUS="speaking")
+        self._last_tts_text = text
+        self.logger.log_event("TTS_START", {"text": text, "voice": use_voice, "engine": "say"})
+
+        try:
+            self._tts_stop_event.clear()
+            self._tts_playback_done.clear()
+            self._tts_active = True
+
+            proc = await asyncio.create_subprocess_exec(
+                "say", "-v", use_voice, text,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            pid = proc.pid
+
+            async def _wait_say():
+                await proc.wait()
+                self._tts_active = False
+                self._tts_finished_at = time.monotonic()
+                self._tts_playback_done.set()
+
+            asyncio.create_task(_wait_say())
+            return pid
+        except Exception as e:
+            print(f"TTS (say) failed: {e}", file=sys.stderr)
+            self._tts_active = False
+            return None
+
     async def _capture_utterance(self, tts_pid: int = 0, tts_text: str = "", tts_only: bool = False) -> str:
         """
         Core capture logic: reads mic, runs VAD, transcribes via whisper.cpp.
@@ -1224,6 +1260,7 @@ async def handle_speak(params: dict) -> dict:
     if not text:
         return {"ok": False, "error": "text is required"}
     voice = params.get("voice")  # passed through to speak(), no shared state mutation
+    engine = params.get("engine", "kokoro")  # "kokoro" (default) or "say" (macOS)
 
     async def _do_tts():
         global _listener_capture_task
@@ -1239,14 +1276,17 @@ async def handle_speak(params: dict) -> dict:
             except asyncio.TimeoutError:
                 print(f"[TTS] Warning: listener didn't pause in time, proceeding", file=sys.stderr, flush=True)
 
+            # Route to the right TTS engine
+            _speak = audio_engine.speak_say if engine == "say" else audio_engine.speak
+
             try:
                 if audio_engine._is_muted():
-                    tts_pid = await audio_engine.speak(text, voice=voice)
+                    tts_pid = await _speak(text, voice=voice)
                     if tts_pid:
                         await audio_engine._tts_playback_done.wait()
                     return
 
-                tts_pid = await audio_engine.speak(text, voice=voice)
+                tts_pid = await _speak(text, voice=voice)
                 if not tts_pid:
                     return
 

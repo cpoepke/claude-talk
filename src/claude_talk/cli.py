@@ -208,13 +208,15 @@ def set_voice(voice):
 
 @server.command("speak")
 @click.argument("text")
-def speak(text):
+@click.option("--engine", type=click.Choice(["kokoro", "say"]), default=None, help="TTS engine (kokoro or say). Defaults to personality setting.")
+def speak(text, engine):
     """Speak text via TTS using the current session's voice (fire-and-forget)."""
     # Strip bash history expansion escapes (! → \! in double-quoted strings)
     text = text.replace("\\!", "!").replace("\\?", "?")
-    # Look up voice for the current pane's session
+    # Look up voice and engine for the current pane's session
     # Priority: kokoro_voice from personality > macOS voice > config fallback
     voice = None
+    resolved_engine = engine  # explicit flag takes priority
     tmux_pane = os.environ.get("TMUX_PANE", "").strip()
     if tmux_pane:
         store = SessionStore(DB())
@@ -232,17 +234,23 @@ def speak(text):
         if session_id:
             info = store.get_personality(session_id)
             if info:
-                # Load personality template to check for kokoro_voice field
+                # Load personality template to check for kokoro_voice and tts_engine
                 personality_name = info.get("personality")
                 if personality_name and personality_name != "unknown":
                     from .personality import load_personality
                     p_info = load_personality(personality_name)
                     if p_info.get("kokoro_voice"):
                         voice = p_info["kokoro_voice"]
+                    # Use personality's engine preference if no explicit flag
+                    if not resolved_engine and p_info.get("tts_engine"):
+                        resolved_engine = p_info["tts_engine"]
                 if not voice:
                     voice = info.get("voice")
+    # Default to kokoro if no engine resolved
+    if not resolved_engine:
+        resolved_engine = "kokoro"
     try:
-        kwargs: dict = {"text": text}
+        kwargs: dict = {"text": text, "engine": resolved_engine}
         if voice:
             kwargs["voice"] = voice
         _server_request("speak", **kwargs)
