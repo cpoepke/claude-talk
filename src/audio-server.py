@@ -36,7 +36,8 @@ import sounddevice as sd
 sys.path.insert(0, str(Path(__file__).parent))
 from claude_talk.db import DB
 from claude_talk.session import SessionStore
-from claude_talk.tmux import send_to_session
+from claude_talk.tmux import send_to_session, set_async_client, get_current_session
+from claude_talk.tmux_control import TmuxControlClient
 from claude_talk.tts import KokoroTTS
 
 # Known Whisper hallucinations from YouTube training data
@@ -1606,6 +1607,22 @@ async def server_main():
     # Initialize Kokoro TTS
     await audio_engine.initialize_tts()
 
+    # Connect tmux control-mode client for zero-subprocess message delivery
+    tmux_client: TmuxControlClient | None = None
+    tmux_session = get_current_session()
+    if tmux_session:
+        idle_secs = config.get_float("TMUX_IDLE_SECS", 2.0)
+        tmux_client = TmuxControlClient(session_name=tmux_session, idle_secs=idle_secs)
+        try:
+            await tmux_client.connect()
+            set_async_client(tmux_client)
+            print(f"Tmux control mode connected (session={tmux_session}, idle={idle_secs}s)")
+        except Exception as e:
+            print(f"Tmux control mode unavailable: {e} (falling back to subprocess)", file=sys.stderr)
+            tmux_client = None
+    else:
+        print("Not in tmux — control mode disabled (using subprocess fallback)")
+
     # Create Unix socket with restrictive permissions
     sock = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
     sock.bind(str(socket_path))
@@ -1624,6 +1641,8 @@ async def server_main():
     finally:
         listener_task.cancel()
         server.close()
+        if tmux_client:
+            await tmux_client.disconnect()
         await whisper_engine.stop()
         state.set(SESSION="stopped")
         event_logger.close()

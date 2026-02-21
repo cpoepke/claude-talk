@@ -12,6 +12,7 @@ src/claude_talk/routing.py
 src/claude_talk/session.py
 src/claude_talk/teammates.py
 src/claude_talk/tmux.py
+src/claude_talk/tts.py
 src/claude_talk/voices.py
 src/claude_talk.egg-info/PKG-INFO
 src/claude_talk.egg-info/SOURCES.txt
@@ -28,4 +29,7 @@ tests/test_devices.py
 tests/test_personality.py
 tests/test_routing.py
 tests/test_session.py
+tests/test_tts.py
+tests/test_vad.py
 tests/test_voices.py
+tests/test_whisper_engine.py

@@ -11,19 +11,22 @@ from .config import Config
 from .db import DB
 from .personality import load_personality
 from .session import SessionStore
-from .tmux import get_current_pane, send_to_session
-
-
-def _get_current_tmux_session() -> str | None:
-    """Get the current tmux session name."""
-    try:
-        result = subprocess.run(
-            ["tmux", "display-message", "-p", "#{session_name}"],
-            capture_output=True, text=True, check=True,
-        )
-        return result.stdout.strip()
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        return None
+from .tmux import (
+    get_current_pane,
+    get_current_session,
+    get_window_index,
+    has_session,
+    kill_pane,
+    list_panes,
+    pane_exists,
+    select_layout,
+    select_pane,
+    send_keys,
+    send_to_session,
+    set_option,
+    set_pane_title,
+    split_window,
+)
 
 
 def _auto_grid(n: int) -> tuple[int, int]:
@@ -87,7 +90,7 @@ class TeammateManager:
     def spawn_team(self, personalities: list[str]) -> list[dict]:
         """Spawn multiple teammates in an auto-fit tmux grid.
 
-        Creates a new tmux window with panes arranged in a grid layout.
+        Creates new panes in the current window arranged in a tiled layout.
         Each pane runs Claude Code with a unique personality.
 
         Args:
@@ -109,11 +112,7 @@ class TeammateManager:
             if not stale_target:
                 self.session_store.release(s["session_id"])
                 continue
-            result = subprocess.run(
-                ["tmux", "has-session", "-t", stale_target],
-                capture_output=True,
-            )
-            if result.returncode != 0:
+            if not has_session(stale_target):
                 self.session_store.release(s["session_id"])
                 print(f"Released stale session {s['session_id'][:8]}... (pane gone)", file=sys.stderr)
 
@@ -128,7 +127,7 @@ class TeammateManager:
                 print(f"Error: Personality '{name}' already active", file=sys.stderr)
                 sys.exit(1)
 
-        tmux_session = _get_current_tmux_session()
+        tmux_session = get_current_session()
         if not tmux_session:
             print("Error: Not running inside tmux.", file=sys.stderr)
             print("Teammates require tmux. Start Claude Code inside a tmux session:", file=sys.stderr)
@@ -139,48 +138,31 @@ class TeammateManager:
         project_dir = Path(__file__).parent.parent.parent
         inherited_flags = _get_current_claude_flags()
 
-        # Get current window and pane targets
-        result = subprocess.run(
-            ["tmux", "display-message", "-p", "#{window_index}"],
-            capture_output=True, text=True, check=True,
-        )
-        window_idx = result.stdout.strip()
+        window_idx = get_window_index()
+        if not window_idx:
+            print("Error: Could not determine tmux window index", file=sys.stderr)
+            sys.exit(1)
         window_target = f"{tmux_session}:{window_idx}"
 
         # Remember original pane to select back after spawning
-        result = subprocess.run(
-            ["tmux", "display-message", "-p", "#{pane_id}"],
-            capture_output=True, text=True, check=True,
-        )
-        original_pane = result.stdout.strip()
+        original_pane = get_current_pane()
 
         # Record existing pane IDs BEFORE splitting (IDs are stable, indices shift)
-        result = subprocess.run(
-            ["tmux", "list-panes", "-t", window_target, "-F", "#{pane_id}"],
-            capture_output=True, text=True, check=True,
-        )
-        existing_pane_ids = set(result.stdout.strip().splitlines())
+        existing_pane_ids = set(list_panes(window_target))
 
         # Split current window into panes for each teammate
         new_pane_ids: list[str] = []
         for _ in range(n):
-            # -P -F prints the new pane's ID immediately
-            result = subprocess.run(
-                ["tmux", "split-window", "-t", window_target, "-P", "-F", "#{pane_id}"],
-                capture_output=True, text=True, check=True,
-            )
-            new_pane_ids.append(result.stdout.strip())
+            pane_id = split_window(window_target)
+            if pane_id:
+                new_pane_ids.append(pane_id)
+            else:
+                print("Error: Failed to split window", file=sys.stderr)
+                sys.exit(1)
 
         # Apply auto-fit tiled layout and ensure mouse mode is on
-        subprocess.run(
-            ["tmux", "select-layout", "-t", window_target, "tiled"],
-            capture_output=True, text=True,
-        )
-        # Enable mouse at session level so all panes are clickable
-        subprocess.run(
-            ["tmux", "set-option", "-t", tmux_session, "mouse", "on"],
-            capture_output=True, text=True,
-        )
+        select_layout(window_target, "tiled")
+        set_option(tmux_session, "mouse", "on")
 
         teammates = []
         for i, name in enumerate(personalities):
@@ -189,22 +171,12 @@ class TeammateManager:
             personality_info = load_personality(name)
             display_name = personality_info.get("display_name", name)
 
-            # Set pane title for easy identification (use pane ID, not index)
-            subprocess.run(
-                ["tmux", "select-pane", "-t", pane_id, "-T", display_name],
-                check=True,
-            )
+            # Set pane title for easy identification
+            set_pane_title(pane_id, display_name)
 
             # Launch Claude in this pane (in the project dir so it picks up skills/hooks)
             claude_cmd = f"cd {shlex.quote(str(project_dir))} && claude {inherited_flags}"
-            subprocess.run(
-                ["tmux", "send-keys", "-t", pane_id, "-l", claude_cmd],
-                check=True,
-            )
-            subprocess.run(
-                ["tmux", "send-keys", "-t", pane_id, "C-m"],
-                check=True,
-            )
+            send_to_session(pane_id, claude_cmd)
 
             print(f"Spawned {name} -> {pane_id}", file=sys.stderr)
             teammates.append({
@@ -220,19 +192,16 @@ class TeammateManager:
         time.sleep(wait_time)
 
         print(f"Starting voice for {len(teammates)} teammates...", file=sys.stderr)
-        from .tmux import send_to_session
         for t in teammates:
             success = send_to_session(t["tmux_target"], f"/claude-talk:start {t['personality']}")
             if success:
-                print(f"  ✓ Started {t['personality']} ({t['tmux_target']})", file=sys.stderr)
+                print(f"  Started {t['personality']} ({t['tmux_target']})", file=sys.stderr)
             else:
-                print(f"  ✗ Failed to start {t['personality']} ({t['tmux_target']})", file=sys.stderr)
+                print(f"  Failed to start {t['personality']} ({t['tmux_target']})", file=sys.stderr)
 
         # Select back to original pane so user has focus
-        subprocess.run(
-            ["tmux", "select-pane", "-t", original_pane],
-            capture_output=True, text=True,
-        )
+        if original_pane:
+            select_pane(original_pane)
 
         return teammates
 
@@ -253,24 +222,13 @@ class TeammateManager:
 
         if tmux_target:
             # Send graceful shutdown (Ctrl+D to exit Claude)
-            subprocess.run(
-                ["tmux", "send-keys", "-t", tmux_target, "C-d"],
-                capture_output=True,
-            )
+            send_keys(tmux_target, "C-d")
             # Wait for graceful shutdown (including SessionStop hooks)
             import time
             time.sleep(2.5)
             # If pane still exists, kill it
-            result = subprocess.run(
-                ["tmux", "list-panes", "-F", "#{pane_id}"],
-                capture_output=True, text=True,
-            )
-            pane_id = tmux_target.split(".")[-1]
-            if pane_id in result.stdout:
-                subprocess.run(
-                    ["tmux", "kill-pane", "-t", tmux_target],
-                    capture_output=True,
-                )
+            if pane_exists(tmux_target):
+                kill_pane(tmux_target)
             print(f"Stopped teammate: {session_id[:8]} ({tmux_target})", file=sys.stderr)
         else:
             print(f"Released teammate: {session_id[:8]}", file=sys.stderr)
@@ -301,13 +259,8 @@ class TeammateManager:
     def send_message(self, from_personality: str, to_personality: str, text: str) -> bool:
         """Send a text message from one teammate to another via tmux.
 
-        Args:
-            from_personality: Sender personality name (for the prefix)
-            to_personality: Recipient personality name
-            text: Message text
-
-        Returns:
-            True if delivered, False otherwise
+        Uses queued=True so the message waits for the recipient's pane to be
+        idle (no active Claude output) before injecting.
         """
         # Find recipient's active session and tmux target
         target = None
@@ -323,17 +276,13 @@ class TeammateManager:
             return False
 
         formatted = f"Teammate {from_personality} said: {text}"
-        return send_to_session(target, formatted)
+        return send_to_session(target, formatted, queued=True)
 
     def broadcast_message(self, from_personality: str, text: str) -> list[str]:
         """Broadcast a text message to all other active teammates via tmux.
 
-        Args:
-            from_personality: Sender personality name
-            text: Message text
-
-        Returns:
-            List of personality names that received the message
+        Uses queued=True so each message waits for the recipient's pane to be
+        idle before injecting.
         """
         delivered = []
         formatted = f"Teammate {from_personality} said to the team: {text}"
@@ -343,7 +292,7 @@ class TeammateManager:
                     and s.get("personality") != from_personality
                     and s.get("personality") != "unknown"
                     and s.get("tmux_target")):
-                if send_to_session(s["tmux_target"], formatted):
+                if send_to_session(s["tmux_target"], formatted, queued=True):
                     delivered.append(s["personality"])
 
         return delivered
