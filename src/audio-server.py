@@ -50,14 +50,28 @@ _WHISPER_HALLUCINATION_BLOCKLIST = frozenset({
     "subscribe",
     "like and subscribe",
     "please like and subscribe",
+    "please subscribe and share",
+    "subscribe and share",
+    "thanks for watching please subscribe and share",
+    "thank you for watching please subscribe and share",
+    "thanks for watching please subscribe",
+    "thank you for watching please subscribe",
     "see you next time",
     "see you in the next video",
     "see you in the next one",
     "bye bye",
+    "bye",
     "goodbye",
     "thank you",
     "thanks",
     "you",
+    "so",
+    "the end",
+    "i'll see you guys next time",
+    "i'll see you in the next one",
+    "don't forget to subscribe",
+    "hit the like button",
+    "ring the bell",
 })
 
 
@@ -1004,7 +1018,8 @@ class AudioEngine:
                                 transcribed = ""
                             # Blocklist: common Whisper hallucinations from YouTube training data
                             if transcribed:
-                                _lower = transcribed.lower().strip().rstrip(".,!?")
+                                _lower = re.sub(r'[.,!?<>\-;:\'"]+', ' ', transcribed.lower()).strip()
+                                _lower = re.sub(r'\s+', ' ', _lower)  # collapse whitespace
                                 if _lower in _WHISPER_HALLUCINATION_BLOCKLIST:
                                     print(f"[WHISPER] blocked hallucination: '{transcribed}'", file=sys.stderr, flush=True)
                                     transcribed = ""
@@ -1217,7 +1232,8 @@ async def _global_listener():
                         if re.fullmatch(r'[\s\.\,\!\?\-]*', transcribed):
                             transcribed = ""
                         if transcribed:
-                            _lower = transcribed.lower().strip().rstrip(".,!?")
+                            _lower = re.sub(r'[.,!?<>\-;:\'"]+', ' ', transcribed.lower()).strip()
+                            _lower = re.sub(r'\s+', ' ', _lower)  # collapse whitespace
                             if _lower in _WHISPER_HALLUCINATION_BLOCKLIST:
                                 print(f"[WHISPER] blocked rescued hallucination: '{transcribed}'", file=sys.stderr, flush=True)
                                 transcribed = ""
