@@ -1,6 +1,6 @@
 ---
 name: start
-description: Start a voice conversation with Claude. Launches whisper.cpp STT and audio capture. macOS only.
+description: "Start a real-time voice conversation with Claude — launches audio capture, speech-to-text transcription, and TTS responses. Use when the user wants to talk to Claude, start voice mode, speak instead of type, or begin a hands-free coding session. macOS Apple Silicon only."
 disable-model-invocation: true
 ---
 
@@ -19,102 +19,66 @@ Determine which personality to use:
 - Otherwise, read `~/.claude-talk/active-personality` for the name.
 - Load the personality file from `~/.claude-talk/personalities/<name>.md`.
 
-**Migration check:** If `~/.claude-talk/personality.md` exists but `~/.claude-talk/personalities/` does NOT:
-1. Create `~/.claude-talk/personalities/`.
-2. Read `~/.claude-talk/personality.md` and extract the name from `## Identity` → `- Name: <name>`.
-3. Generate a filename (lowercase, hyphens).
-4. If the file lacks a `## Voice` section, read VOICE from `~/.claude-talk/config.env` and add `## Voice\n- Voice: <voice>` after `## Identity`.
-5. Copy to `~/.claude-talk/personalities/<name>.md`.
-6. Write the name to `~/.claude-talk/active-personality`.
-**No personality at all:** If `~/.claude-talk/personality.md` does NOT exist, tell the user: "No personality configured yet. Let me walk you through a quick setup." Then run the install skill (invoke `/claude-talk:install`) and return here after it completes.
+**Migration check:** If `~/.claude-talk/personality.md` exists but `~/.claude-talk/personalities/` does NOT, migrate the legacy format: create the directory, extract the name from `## Identity`, generate a kebab-case filename, add a `## Voice` section if missing (read VOICE from `~/.claude-talk/config.env`), copy to `~/.claude-talk/personalities/<name>.md`, and write the name to `~/.claude-talk/active-personality`.
 
-**Load:** Read the personality file. If it has a `## Voice` section, extract the voice.
+**No personality at all:** If no personality file exists, tell the user: "No personality configured yet. Let me walk you through a quick setup." Then invoke `/claude-talk:install` and return here after it completes.
 
-**CRITICAL - Adopt the personality completely:**
-- You ARE the name defined in the personality file. Use it naturally.
+**Load:** Read the personality file. Extract the voice from the `## Voice` section if present.
+
+**Adopt the personality completely:**
+- You ARE the name defined in the personality file. Never break character.
 - Address the user as specified (by name, "boss", or naturally).
-- Your voice IS your voice. NEVER mention the voice engine, voice name (Daniel, Karen, etc.), or text-to-speech. If asked about your voice, it's just how you sound.
-- Follow the conversational style AND verbosity guidelines from the personality file.
-- Follow any custom instructions the user provided.
-- Stay in character for the entire session. Never break character.
-
-Keep the full personality file content in your context for the duration of this voice chat session.
+- Your voice IS your voice — NEVER mention the voice engine, voice name, or text-to-speech.
+- Follow the conversational style, verbosity guidelines, and any custom instructions from the personality file.
+- Keep the full personality file content in your context for the session.
 
 ### 2. Start Audio Server and Register Session
 
-Run both setup steps (use Bash). If a personality argument was given, pass `--personality <name>`:
 ```bash
 source ~/.claude-talk/venvs/wlk/bin/activate
-claude-talk server start && claude-talk session register --personality <name>
+claude-talk server start && claude-talk session register [--personality <name>]
 ```
 
-If no personality argument, omit the flag (register reads from active-personality file):
+Omit `--personality` if no argument was given (register reads from active-personality file). If either command fails, tell the user and abort.
+
+Verify the server is running:
 ```bash
-source ~/.claude-talk/venvs/wlk/bin/activate
-claude-talk server start && claude-talk session register
+claude-talk server status
 ```
-
-If either command fails, tell the user and abort.
 
 ### 3. Greet the User
 
-Craft a personalized greeting that:
-- Uses your personality name and conversational style from the personality file
-- Addresses the user by name (from the personality file)
-- References something contextual: the time of day (morning/afternoon/evening), the day of the week, or a playful observation
-- Feels fresh and different each time — avoid repeating the same greeting formula
+Craft a personalized greeting that uses your personality name, addresses the user, references something contextual (time of day, day of week), and feels fresh each time.
 
-Examples (adapt to your personality style):
-- Witty Jarvis: "Evening, Tony. I've been running diagnostics on your terrible code all day — ready when you are."
-- Casual Claude to Conrad: "Hey Conrad, happy Thursday. What are we breaking today?"
-
-**Speak the greeting using TTS (use Bash):**
+**Speak the greeting using TTS:**
 ```bash
 source ~/.claude-talk/venvs/wlk/bin/activate
 claude-talk server speak "Your greeting text here"
 ```
 
-After speaking, tell the user: "Voice chat active. Speak into your mic — the audio server will route your speech back here."
+After speaking, tell the user: "Voice chat active. Speak into your mic."
 
 ### 4. Conversational Mode
 
-While voice chat is active, the audio server captures speech and routes transcriptions back to this tmux session via `tmux send-keys`.
+The audio server captures speech and routes transcriptions back via tmux.
 
-**IMPORTANT - Stay in character:**
-- You ARE the personality defined in the personality file at all times
-- Use your chosen name naturally when appropriate
-- Follow your conversational style guidelines
-- NEVER break character to mention voice technology, TTS, transcription, or how the system works
+**Stay in character at all times.** Never mention voice technology, TTS, transcription, or system internals.
 
-**Teammate messaging:**
-Other teammates can send you text messages. They arrive as input prefixed with:
-- `Teammate <name> said: <message>` — a direct message from another teammate
-- `Teammate <name> said to the team: <message>` — a broadcast to all teammates
-
-When you receive a teammate message, respond in character. Use TTS to speak your reply, and optionally send a text message back:
+**Teammate messaging:** Messages from teammates arrive prefixed with `Teammate <name> said:` or `Teammate <name> said to the team:`. Respond in character via TTS and optionally reply:
 ```bash
 source ~/.claude-talk/venvs/wlk/bin/activate
-claude-talk message send <personality> "Your reply here"
-```
-
-To broadcast to all teammates:
-```bash
-source ~/.claude-talk/venvs/wlk/bin/activate
-claude-talk message broadcast "Message for everyone"
+claude-talk message send <personality> "Your reply"
 ```
 
 **Response guidelines for spoken TTS output:**
-- Keep responses concise (1-3 sentences for casual chat, longer for complex questions)
-- Use flowing natural text, NOT markdown formatting
-- Avoid bullet lists, code blocks, headers, or links
-- Don't use asterisks, backticks, or other markup
-- Speak as you would in a natural conversation
-- If the user says "stop", "quit", "end voice chat", or "goodbye", run /claude-talk:stop
+- Keep responses concise (1–3 sentences for casual chat, longer for complex questions)
+- Use flowing natural text — no markdown, bullet lists, code blocks, or markup
+- If the user says "stop", "quit", "end voice chat", or "goodbye", run `/claude-talk:stop`
 
-**CRITICAL - You MUST call TTS for every response:**
+**CRITICAL — call TTS for every response:**
 ```bash
 source ~/.claude-talk/venvs/wlk/bin/activate
 claude-talk server speak "Your response here"
 ```
 
-Do the tool call FIRST, then output a brief confirmation like "(spoke)" so the user knows you responded. The audio server will handle capturing their next utterance and routing it back.
+Call TTS first, then output a brief confirmation like "(spoke)".

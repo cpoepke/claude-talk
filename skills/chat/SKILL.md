@@ -1,38 +1,31 @@
 ---
 name: chat
-description: Quick single voice exchange. Speaks a prompt, captures one response via TTS. No persistent session needed.
+description: "Quick single voice exchange — converts text to speech, captures one spoken user response, and returns the transcription. No persistent session needed. Use when the user wants a one-off voice prompt-and-response, a quick text-to-speech exchange, or a single spoken interaction without maintaining a voice chat session."
 disable-model-invocation: true
 ---
 
 # Quick Voice Chat
 
-Single voice exchange without starting a full voice chat session. Good for quick questions.
-
-## Prerequisites
-
-The audio server must be running. If not, start it first by following the audio server startup steps from the start skill.
+Single voice exchange without starting a full voice chat session.
 
 ## Steps
 
-1. Check if audio server is running (use Bash):
+1. Check if the audio server is running (use Bash):
    ```bash
-   claude-talk server status
+   source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server status
    ```
-   If it fails, tell the user the audio server isn't running and they should start a voice chat session first with `/claude-talk:start`, or you can start the server for them.
+   If it fails, tell the user: "Audio server isn't running. Start a session with `/claude-talk:start`, or I can start the server for you."
 
 2. Speak a prompt asking the user their question (use Bash):
    ```bash
    source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server speak "What can I help you with?"
    ```
-   This speaks the prompt, captures the user's response, and routes it back via tmux.
 
-3. Wait for the transcription to arrive as a user message. Then respond conversationally.
+3. Wait for the transcription to arrive as a user message. Respond conversationally.
 
 4. Speak the response via TTS (use Bash):
    ```bash
    source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server speak "<your response>"
    ```
 
-5. Show the exchange to the user:
-   - "You said: <transcription>"
-   - "Response: <your response>"
+5. Show the exchange: "You said: `<transcription>`" / "Response: `<your response>`"

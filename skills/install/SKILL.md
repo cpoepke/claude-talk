@@ -1,6 +1,6 @@
 ---
 name: install
-description: Install claude-talk and personalize your voice assistant. Sets up dependencies, then lets you choose a name, voice, and personality. macOS (Apple Silicon) only.
+description: "Install claude-talk dependencies and personalize your voice assistant — sets up Python venvs, whisper.cpp, Kokoro TTS, then walks through choosing a name, voice, and personality style. Use when the user wants to install, set up, or configure claude-talk for the first time, or reconfigure with --force. macOS Apple Silicon only."
 disable-model-invocation: true
 argument-hint: "[--force]"
 ---

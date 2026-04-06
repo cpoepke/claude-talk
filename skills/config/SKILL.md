@@ -1,45 +1,47 @@
 ---
 name: config
-description: View or edit voice chat configuration. Shows current settings and allows changes.
+description: "View, edit, or reset voice chat configuration including voice, mic gain, audio device, and TTS settings. Use when the user asks about voice settings, wants to change voice configuration, adjust audio preferences, or check current claude-talk settings."
 disable-model-invocation: true
 argument-hint: "[setting=value]"
 ---
 
 # Voice Chat Configuration
 
-View or update voice chat settings.
+View or update claude-talk voice chat settings.
 
 ## If no arguments ($ARGUMENTS is empty)
 
-Show the current configuration by reading these files in order:
-1. `~/.claude-talk/config.env` (user overrides)
-2. Find CLAUDE_TALK_DIR and read `<CLAUDE_TALK_DIR>/config/defaults.env` (defaults)
+Show the current configuration:
 
-Also read `~/.claude-talk/active-personality` and show the active personality name (e.g., "Active personality: **witty-jarvis**"). If the file doesn't exist, show "Active personality: (none — run `/claude-talk:personality` to set up)".
+1. Read `~/.claude-talk/config.env` (user overrides) and `<CLAUDE_TALK_DIR>/config/defaults.env` (defaults). Find CLAUDE_TALK_DIR from the config or by locating the plugin directory.
 
-Display a clear summary of all settings with their current effective values, noting which are defaults and which are user-set.
+2. Read `~/.claude-talk/active-personality` and show the active personality name. If missing, show "Active personality: (none — run `/claude-talk:personality` to set up)".
 
-Show current audio server status using the Python CLI (use Bash):
-```bash
-source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server status
-```
+3. Display all settings with effective values, marking which are defaults vs user-set.
 
-Also show audio devices (use Bash):
-```bash
-claude-talk devices
-```
+4. Show audio server status, devices, and active AUDIO_DEVICE resolution:
+   ```bash
+   source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk server status
+   claude-talk devices
+   ```
 
-Show the active AUDIO_DEVICE setting and what it resolves to (if "auto" or unset, note that auto-detection is active).
-
-Also show available TTS voices:
-```bash
-say -v '?' | head -20
-```
+5. Show available TTS voices:
+   ```bash
+   claude-talk tts voices
+   ```
 
 ## If arguments provided ($ARGUMENTS is not empty)
 
-Parse the argument as `KEY=VALUE` (e.g., `VOICE=Karen`, `MIC_GAIN=4.0`, `AUDIO_DEVICE=2`, `AUDIO_DEVICE=auto`).
+Parse the argument as `KEY=VALUE` (e.g., `KOKORO_VOICE=bm_daniel`, `MIC_GAIN=4.0`, `AUDIO_DEVICE=2`).
 
-Update `~/.claude-talk/config.env` by adding or replacing the line with that key.
+Update `~/.claude-talk/config.env` using the CLI:
+```bash
+source ~/.claude-talk/venvs/wlk/bin/activate && claude-talk config KEY=VALUE
+```
 
-Confirm the change to the user.
+Verify the change took effect:
+```bash
+claude-talk config KEY
+```
+
+Confirm the new effective value to the user.
